@@ -1,0 +1,190 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// NextAuth.js required models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime? @map("email_verified")
+  image         String?
+  passwordHash  String?   @map("password_hash")
+  isAdmin       Boolean   @default(false) @map("is_admin")
+  isSuperUser   Boolean   @default(false) @map("is_super_user")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  accounts          Account[]
+  sessions          Session[]
+  subscription      Subscription?
+  usageLogs         UsageLog[]
+  generationHistory GenerationHistory[]
+
+  @@map("users")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// Subscription plans
+enum SubscriptionPlan {
+  free
+  plus
+  pro
+  premium
+}
+
+enum SubscriptionStatus {
+  active
+  cancelled
+  past_due
+  trialing
+}
+
+model Subscription {
+  id                    String             @id @default(cuid())
+  userId                String             @unique @map("user_id")
+  plan                  SubscriptionPlan   @default(free)
+  status                SubscriptionStatus @default(active)
+  
+  // Stripe integration
+  stripeCustomerId      String?            @unique @map("stripe_customer_id")
+  stripeSubscriptionId  String?            @unique @map("stripe_subscription_id")
+  stripePriceId         String?            @map("stripe_price_id")
+  
+  // PayPal integration
+  paypalSubscriptionId  String?            @unique @map("paypal_subscription_id")
+  
+  // Billing period
+  currentPeriodStart    DateTime?          @map("current_period_start")
+  currentPeriodEnd      DateTime?          @map("current_period_end")
+  cancelAtPeriodEnd     Boolean            @default(false) @map("cancel_at_period_end")
+  
+  // Token usage tracking
+  tokensUsed            BigInt             @default(0) @map("tokens_used")
+  tokensLimit           BigInt             @map("tokens_limit")
+  extraTokensPurchased  BigInt             @default(0) @map("extra_tokens_purchased") // Purchased tokens that persist across plan changes
+  
+  // Export usage tracking
+  exportsUsed           Int                @default(0) @map("exports_used")
+  exportsLimit          Int?               @map("exports_limit") // null = unlimited
+  
+  // Auto top-up configuration
+  autoTopUpEnabled      Boolean            @default(false) @map("auto_top_up_enabled")
+  autoTopUpAmount       Int?               @map("auto_top_up_amount") // tokens to add when quota runs out
+  autoTopUpPrice        Decimal?           @map("auto_top_up_price") @db.Decimal(10, 2) // price in USD
+  
+  // Trial account fields (Admin-created trial accounts)
+  isTrial               Boolean            @default(false) @map("is_trial")
+  trialEndsAt           DateTime?          @map("trial_ends_at")
+  trialPlan             SubscriptionPlan?  @map("trial_plan") // The plan being trialed (plus or pro)
+  createdByAdminId      String?            @map("created_by_admin_id") // Admin who created the trial
+  
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+
+  user                  User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  usageLogs             UsageLog[]
+
+  @@map("subscriptions")
+}
+
+model UsageLog {
+  id             String       @id @default(cuid())
+  userId         String       @map("user_id")
+  subscriptionId String?      @map("subscription_id")
+  module         String       // 'drills' | 'labs' | 'homework' | 'exams' | 'lecture_rehearsal' | 'exam_evaluation'
+  inputTokens    Int          @map("input_tokens")
+  outputTokens   Int          @map("output_tokens")
+  totalTokens    Int          @map("total_tokens")
+  model          String       // LLM model used
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([subscriptionId, createdAt])
+  @@map("usage_logs")
+}
+
+// Payment records for auditing
+model PaymentRecord {
+  id                String   @id @default(cuid())
+  userId            String   @map("user_id")
+  provider          String   // 'stripe' | 'paypal' | 'linepay'
+  providerPaymentId String   @map("provider_payment_id")
+  amount            Decimal  @db.Decimal(10, 2)
+  currency          String   @default("USD")
+  status            String   // 'succeeded' | 'pending' | 'failed' | 'refunded'
+  metadata          Json?
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@map("payment_records")
+}
+
+// Generation history for Premium users (max 50 files)
+model GenerationHistory {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  module        String   // 'drills' | 'labs' | 'homework' | 'exams' | 'lecture_rehearsal' | 'exam_evaluation'
+  title         String   // Generated content title/topic
+  format        String   // 'docx' | 'pptx' | 'pdf' | 'json'
+  fileUrl       String   @map("file_url") // Storage URL (e.g., Supabase Storage)
+  fileSize      Int      @map("file_size") // File size in bytes
+  metadata      Json?    // Additional metadata (question count, difficulty, etc.)
+  sentToEmail   Boolean  @default(false) @map("sent_to_email") // Whether file was auto-sent when deleted
+  createdAt     DateTime @default(now()) @map("created_at")
+  
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, createdAt])
+  @@map("generation_history")
+}
