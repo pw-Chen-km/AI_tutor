@@ -95,12 +95,11 @@ export async function POST(req: NextRequest) {
                                 const uint8Array = new Uint8Array(buffer);
                                 const loadingTask = pdfjs.getDocument({
                                     data: uint8Array,
-                                    disableWorker: true,
                                     useWorkerFetch: false,
                                     isEvalSupported: false,
                                     verbosity: 0,
                                     useSystemFonts: true,
-                                });
+                                } as any);
                                 
                                 const pdf = await loadingTask.promise;
                                 let fullText = '';

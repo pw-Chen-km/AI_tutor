@@ -849,7 +849,7 @@ Rules:
               slidesFromPpt: slidesFromPptFile,
               web_sources,
               llmPool,
-              onProgress: (current, total) => {
+              onProgress: (current: number, total: number) => {
                 const fileStart = 40 + (i / totalFilesForProgress) * 50;
                 const fileEnd = 40 + ((i + 1) / totalFilesForProgress) * 50;
                 const p = total ? fileStart + (current / total) * (fileEnd - fileStart) : fileStart;
@@ -961,7 +961,7 @@ Rules:
               slidesFromPpt: slidesFromPdf,
               web_sources,
               llmPool,
-              onProgress: (current, total) => {
+              onProgress: (current: number, total: number) => {
                 const fileIndex = pptxFiles.length + i;
                 const fileStart = 40 + (fileIndex / totalFilesForProgress) * 50;
                 const fileEnd = 40 + ((fileIndex + 1) / totalFilesForProgress) * 50;
@@ -1104,7 +1104,7 @@ Rules:
                   slidesFromPpt: slidesFromPptFile,
                   web_sources,
                   llmPool,
-                  onProgress: (current, total) => {
+                  onProgress: (current: number, total: number) => {
                     const fileStart = 40 + (i / pptxFiles.length) * 50;
                     const fileEnd = 40 + ((i + 1) / pptxFiles.length) * 50;
                     const p = total ? fileStart + (current / total) * (fileEnd - fileStart) : fileStart;
@@ -1395,7 +1395,7 @@ Rules:
             slidesFromPpt,
             web_sources,
             llmPool,
-            onProgress: (current, total) => {
+            onProgress: (current: number, total: number) => {
               // Calculate progress: 50% base + 50% for slides (0-50% range)
               const slideProgress = Math.floor((current / total) * 50);
               sendProgress({ 
