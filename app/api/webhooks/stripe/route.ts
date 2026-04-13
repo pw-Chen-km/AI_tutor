@@ -214,7 +214,7 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
 }
 
 async function handleInvoicePaid(invoice: Stripe.Invoice) {
-  const subscriptionId = invoice.subscription as string;
+  const subscriptionId = (invoice as Stripe.Invoice & { subscription?: string }).subscription;
   
   if (!subscriptionId) return;
   
@@ -246,7 +246,7 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
     data: {
       userId: subscription.userId,
       provider: 'stripe',
-      providerPaymentId: invoice.payment_intent as string || invoice.id,
+      providerPaymentId: (invoice as Stripe.Invoice & { payment_intent?: string }).payment_intent || invoice.id,
       amount: (invoice.amount_paid || 0) / 100,
       currency: invoice.currency.toUpperCase(),
       status: 'succeeded',
@@ -261,6 +261,11 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
 }
 
 async function handleSubscriptionUpdated(stripeSubscription: Stripe.Subscription) {
+  const stripeSub = stripeSubscription as Stripe.Subscription & {
+    cancel_at_period_end?: boolean;
+    current_period_start?: number;
+    current_period_end?: number;
+  };
   const subscription = await prisma.subscription.findUnique({
     where: { stripeSubscriptionId: stripeSubscription.id },
   });
@@ -275,7 +280,7 @@ async function handleSubscriptionUpdated(stripeSubscription: Stripe.Subscription
   const newPlan = priceId ? getPlanFromPriceId(priceId) : null;
   
   const updateData: any = {
-    cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
+    cancelAtPeriodEnd: stripeSub.cancel_at_period_end,
   };
   
   // Map Stripe status to our status
@@ -310,11 +315,11 @@ async function handleSubscriptionUpdated(stripeSubscription: Stripe.Subscription
   }
   
   // Update period dates
-  if (stripeSubscription.current_period_start) {
-    updateData.currentPeriodStart = new Date(stripeSubscription.current_period_start * 1000);
+  if (stripeSub.current_period_start) {
+    updateData.currentPeriodStart = new Date(stripeSub.current_period_start * 1000);
   }
-  if (stripeSubscription.current_period_end) {
-    updateData.currentPeriodEnd = new Date(stripeSubscription.current_period_end * 1000);
+  if (stripeSub.current_period_end) {
+    updateData.currentPeriodEnd = new Date(stripeSub.current_period_end * 1000);
   }
   
   await prisma.subscription.update({

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
@@ -80,7 +80,7 @@ const getPlanModules = (plan: PlanType): string[] => {
   return [...PLAN_CONFIG[plan].features.modules] as string[];
 };
 
-export default function BillingPage() {
+function BillingPageContent() {
   const { data: session } = useSession();
   const searchParams = useSearchParams();
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
@@ -719,5 +719,17 @@ export default function BillingPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+export default function BillingPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    }>
+      <BillingPageContent />
+    </Suspense>
   );
 }

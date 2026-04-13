@@ -18,13 +18,18 @@ export interface SkillOutput {
 }
 
 export interface SkillMetadata {
+  id?: string;
   name: string;
   description: string;
-  category: 'content_generation' | 'content_enhancement' | 'validation' | 'specialized' | 'orchestration';
+  category?: 'content_generation' | 'content_enhancement' | 'validation' | 'specialized' | 'orchestration';
   version: string;
-  estimatedTokens: number;
+  author?: string;
+  capabilities?: string[];
+  inputSchema?: Record<string, any>;
+  outputSchema?: Record<string, any>;
+  estimatedTokens?: number;
   dependencies?: string[]; // other skills this skill depends on
-  requiredInputs: string[];
+  requiredInputs?: string[];
   optionalInputs?: string[];
 }
 

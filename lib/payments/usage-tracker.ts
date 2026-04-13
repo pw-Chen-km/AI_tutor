@@ -291,7 +291,7 @@ export async function updateAutoTopUp(
 export function hasModuleAccess(plan: PlanType, module: string): boolean {
   const planConfig = PLAN_CONFIG[plan];
   if (!planConfig) return false;
-  return planConfig.features.modules.includes(module);
+  return (planConfig.features.modules as readonly string[]).includes(module);
 }
 
 /**

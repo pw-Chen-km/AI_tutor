@@ -307,7 +307,8 @@ export async function POST(req: NextRequest) {
       // Notes will be added via XML modification after PPTX generation
     }
 
-    let buffer = await pptx.write('nodebuffer');
+    const rawBuffer = await pptx.write({ outputType: 'nodebuffer' } as any);
+    let buffer = Buffer.isBuffer(rawBuffer) ? rawBuffer : Buffer.from(rawBuffer as Uint8Array);
     
     // Add notes by modifying PPTX XML (similar to export-pptx-notes)
     // Always try to add notes, even if PDF rendering failed
@@ -434,7 +435,7 @@ export async function POST(req: NextRequest) {
       console.error('[Export PDF->PPTX] Failed to save generation history:', historyError);
     }
 
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': getContentType('pptx'),
         'Content-Disposition': `attachment; filename="${filename}"`,

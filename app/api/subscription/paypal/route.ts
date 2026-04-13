@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     const { subscriptionId, approvalUrl } = await createPayPalSubscription({
       userId: session.user.id,
       plan: plan as PlanType,
-      returnUrl: `${baseUrl}/api/subscription/paypal/callback?subscription_id=${subscriptionId}`,
+      returnUrl: `${baseUrl}/api/subscription/paypal/callback`,
       cancelUrl: `${baseUrl}/billing?cancelled=true`,
     });
     

@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
                                 const pageNum = (pageData.pageIndex ?? 0) + 1;
                                 return `[PAGE: ${pageNum}]\n${pageText}\n`;
                             };
-                            const data = await pdfParse(buffer, { pagerender: renderPage });
+                            const data = await pdfParse(buffer, { pagerender: renderPage as any });
                             
                             if (data.text && data.text.trim().length > 100) {
                                 // pdf-parse now provides per-page markers via pagerender

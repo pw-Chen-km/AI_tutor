@@ -8,7 +8,7 @@ import { useStore } from '@/lib/store';
 import { saveTemplateToIdb, getTemplateFromIdb } from '@/lib/export/template-store';
 import { Upload, FileText, CheckCircle2 } from 'lucide-react';
 
-export type ExportFormat = 'exam_docx' | 'exam_pdf' | 'exam_pptx';
+export type ExportFormat = 'docx' | 'pdf' | 'pptx' | 'exam_docx' | 'exam_pdf' | 'exam_pptx';
 export type ExportLanguageMode = 'primary' | 'secondary' | 'both_separate_zip';
 
 export interface ExportSource {
@@ -242,6 +242,9 @@ export function ExportPanel(props: {
 
         // Determine file extension based on format
         const extMap: Record<ExportFormat, string> = {
+            'docx': 'docx',
+            'pdf': 'pdf',
+            'pptx': 'pptx',
             'exam_docx': 'docx',
             'exam_pdf': 'pdf',
             'exam_pptx': 'pptx',
@@ -325,7 +328,7 @@ export function ExportPanel(props: {
         if (!file) return;
 
         const ext = file.name.split('.').pop()?.toLowerCase();
-        const type = ext === 'docx' ? 'docx' : ext === 'pptx' ? 'pptx' : null;
+        const type: 'docx' | 'pptx' | null = ext === 'docx' ? 'docx' : ext === 'pptx' ? 'pptx' : null;
         if (!type) {
             alert('Please upload a .docx or .pptx file.');
             return;
@@ -335,7 +338,7 @@ export function ExportPanel(props: {
         const id = `${type}-template-${Date.now()}`;
         await saveTemplateToIdb(id, buffer);
 
-        const newTpl = { id, name: file.name, type };
+        const newTpl: { id: string; name: string; type: 'docx' | 'pptx' } = { id, name: file.name, type };
         const filtered = exportTemplates.filter((t) => t.type !== type);
         setExportTemplates([...filtered, newTpl]);
     };

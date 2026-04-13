@@ -558,7 +558,7 @@ export async function extractPdfPagesFromBase64(pdfBase64: string): Promise<PdfP
       const pageNum = (pageData.pageIndex ?? 0) + 1;
       return `[PAGE: ${pageNum}]\n${pageText}\n`;
     };
-    const data = await pdfParse(buffer, { pagerender: renderPage });
+    const data = await pdfParse(buffer, { pagerender: renderPage as any });
     const parsedPages = extractPdfPagesFromContent((data?.text || '').trim());
     if (parsedPages.length > 0) {
       return parsedPages;
@@ -771,10 +771,9 @@ export async function callOpenAIResponsesJson(params: {
 
   const parsed = safeParseLLMJson(text);
   const usage = response?.usage;
-  const tokensUsed =
-    usage?.total_tokens ??
-    ((usage?.input_tokens || 0) + (usage?.output_tokens || 0)) ??
-    Math.round((instructions.length + promptText.length + text.length) / 4);
+  const fallbackTokenEstimate = Math.round((instructions.length + promptText.length + text.length) / 4);
+  const tokenSum = (usage?.input_tokens || 0) + (usage?.output_tokens || 0);
+  const tokensUsed = usage?.total_tokens ?? (tokenSum > 0 ? tokenSum : fallbackTokenEstimate);
 
   return {
     data: parsed,

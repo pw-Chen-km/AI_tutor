@@ -19,7 +19,7 @@ export abstract class BaseSkill implements AgentSkill {
    */
   validateInput(input: SkillInput): { valid: boolean; error?: string } {
     // Check required inputs
-    for (const required of this.metadata.requiredInputs) {
+    for (const required of this.metadata.requiredInputs ?? []) {
       if (!(required in input) || input[required] === undefined || input[required] === null) {
         return {
           valid: false,

@@ -16,7 +16,7 @@ const MODULE_NAMES: Record<string, string> = {
 
 // Get modules for each plan
 const getPlanModules = (plan: PlanType): string[] => {
-  return PLAN_CONFIG[plan].features.modules;
+  return [...PLAN_CONFIG[plan].features.modules];
 };
 
 const plans = [

@@ -96,7 +96,7 @@ export async function createLinePayRequest({
   confirmUrl: string;
   cancelUrl: string;
 }): Promise<{ transactionId: string; paymentUrl: string }> {
-  const planConfig = PLAN_CONFIG[plan];
+  const planConfig = PLAN_CONFIG[plan] as { name: string; priceUSD: number; priceTWD: number; tokensLimit: number; [k: string]: any };
   
   if (!planConfig || planConfig.priceUSD === 0) {
     throw new Error(`Invalid plan for Line Pay: ${plan}`);

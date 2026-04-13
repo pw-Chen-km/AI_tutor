@@ -60,7 +60,7 @@ export function DrillsModuleV2() {
   const drillsTypes = useMemo(() => getDrillsTypes(subject, customQuestionTypes?.drills), [subject, customQuestionTypes?.drills]);
   
   const [typeWeights, setTypeWeights] = useState(defaultWeights(drillsTypes));
-  const typeCounts = useMemo(() => weightsToCounts(typeWeights, numberOfQuestions), [typeWeights, numberOfQuestions]);
+  const typeCounts = useMemo(() => weightsToCounts(numberOfQuestions, typeWeights), [numberOfQuestions, typeWeights]);
 
   const drills = Array.isArray(generatedContent.drills) ? generatedContent.drills : [];
   const safeDrills = drills.filter((d) => d && typeof d === 'object');
