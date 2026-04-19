@@ -1,11 +1,32 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import JSZip from 'jszip';
 import { useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Sparkles, Loader2, FileText, ClipboardCheck, CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Sparkles, Loader2, FileText, ClipboardCheck, CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronUp, Download, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { CodeBlock } from '@/components/shared/code-block';
+
+type ExamEvalFormat = 'docx' | 'pdf';
+
+function downloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function formatDateYYYYMMDD(date: Date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}${m}${d}`;
+}
 
 interface QuestionEvaluation {
     questionNumber: number;
@@ -33,10 +54,18 @@ interface EvaluationResult {
 export function ExamEvaluationModule() {
     const { teacherFiles, studentFiles, llmConfig, languageConfig, subject, generatedContent, setGeneratedContent } = useStore();
     const [loading, setLoading] = useState(false);
-    const [evaluationResults, setEvaluationResults] = useState<EvaluationResult[]>([]);
+    const [evaluationResults, setEvaluationResults] = useState<EvaluationResult[]>(() => {
+        const cached = (generatedContent as any)?.exam_evaluation;
+        return Array.isArray(cached) ? (cached as EvaluationResult[]) : [];
+    });
     const [expandedStudents, setExpandedStudents] = useState<Record<string, boolean>>({});
     const [expandedQuestions, setExpandedQuestions] = useState<Record<string, boolean>>({});
     const [progress, setProgress] = useState({ current: 0, total: 0, percentage: 0, studentName: '' });
+    const [exportFormat, setExportFormat] = useState<ExamEvalFormat>('docx');
+    // exportTarget is either 'all' or the array index of the selected student
+    // (using index avoids collisions when two students have the same name / no id).
+    const [exportTarget, setExportTarget] = useState<'all' | number>('all');
+    const [exporting, setExporting] = useState(false);
 
     const handleEvaluate = async () => {
         if (teacherFiles.length === 0) {
@@ -147,6 +176,179 @@ export function ExamEvaluationModule() {
             setProgress({ current: 0, total: 0, percentage: 0, studentName: '' });
         }
     };
+
+    const buildStudentMarkdown = (result: EvaluationResult): string => {
+        const lines: string[] = [];
+        const name = result.studentName || result.studentId || 'Student';
+        lines.push(`# ${name}`);
+        lines.push('');
+        lines.push(`**Score:** ${result.totalScore} / ${result.maxScore}  (${(result.percentage ?? 0).toFixed(1)}%)`);
+        if (result.studentId) lines.push(`**Student ID:** ${result.studentId}`);
+        lines.push('');
+        if (result.overallFeedback) {
+            lines.push('## Overall Feedback');
+            lines.push('');
+            lines.push(formatBilingual(result.overallFeedback));
+            lines.push('');
+        }
+        if (Array.isArray(result.evaluations) && result.evaluations.length > 0) {
+            lines.push('## Per-Question Evaluation');
+            lines.push('');
+            for (const ev of result.evaluations) {
+                const status = ev.isCorrect ? 'Correct' : ev.awardedPoints > 0 ? 'Partial' : 'Incorrect';
+                lines.push(`### Question ${ev.questionNumber}  —  ${ev.awardedPoints} / ${ev.maxPoints} pts  (${status})`);
+                lines.push('');
+                if (ev.questionText) {
+                    lines.push('**Question:**');
+                    lines.push('');
+                    lines.push(ev.questionText);
+                    lines.push('');
+                }
+                if (ev.correctAnswer) {
+                    lines.push('**Correct Answer:**');
+                    lines.push('');
+                    lines.push(ev.correctAnswer);
+                    lines.push('');
+                }
+                if (ev.studentAnswer) {
+                    lines.push('**Student Answer:**');
+                    lines.push('');
+                    lines.push(ev.studentAnswer);
+                    lines.push('');
+                }
+                if (ev.explanation) {
+                    lines.push('**Grading Explanation:**');
+                    lines.push('');
+                    lines.push(formatBilingual(ev.explanation));
+                    lines.push('');
+                }
+                if (ev.feedback) {
+                    lines.push('**Learning Suggestions:**');
+                    lines.push('');
+                    lines.push(formatBilingual(ev.feedback));
+                    lines.push('');
+                }
+                lines.push('---');
+                lines.push('');
+            }
+        } else if (result.rawResponse) {
+            lines.push('## Raw Response');
+            lines.push('');
+            lines.push(result.rawResponse);
+        }
+        return lines.join('\n');
+    };
+
+    const sanitizeFilename = (s: string) =>
+        s.replace(/[\\/:*?"<>|]+/g, '-').trim() || 'student';
+
+    const exportSingleStudent = async (
+        result: EvaluationResult,
+        format: ExamEvalFormat,
+    ): Promise<{ filename: string; blob: Blob }> => {
+        const dateSuffix = formatDateYYYYMMDD(new Date());
+        const baseName = sanitizeFilename(result.studentName || result.studentId || 'student');
+        const filename = `Evaluation_${baseName}_${dateSuffix}.${format}`;
+        const md = buildStudentMarkdown(result);
+
+        const res = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                exportKind: 'lecture',
+                format,
+                filename,
+                language: 'primary',
+                title: `Exam Evaluation — ${result.studentName || result.studentId || 'Student'}`,
+                primaryLanguage: languageConfig?.primaryLanguage || 'English',
+                secondaryLanguage: languageConfig?.secondaryLanguage || 'none',
+                moduleId: 'exam_evaluation',
+                items: [
+                    {
+                        number: 1,
+                        title: result.studentName || 'Evaluation Report',
+                        type: 'evaluation',
+                        points: result.maxScore || 0,
+                        sources: [],
+                        primary: { question: md, solution: '', explanation: '' },
+                    },
+                ],
+            }),
+        });
+
+        if (!res.ok) {
+            let msg = `HTTP ${res.status}`;
+            try {
+                const j = await res.json();
+                msg = j?.error || msg;
+            } catch {
+                /* ignore */
+            }
+            throw new Error(msg);
+        }
+
+        const blob = await res.blob();
+        return { filename, blob };
+    };
+
+    const handleExport = async () => {
+        if (evaluationResults.length === 0) {
+            alert('Please run an evaluation first.');
+            return;
+        }
+        setExporting(true);
+        try {
+            if (exportTarget === 'all') {
+                if (evaluationResults.length === 1) {
+                    const a = await exportSingleStudent(evaluationResults[0], exportFormat);
+                    downloadBlob(a.blob, a.filename);
+                } else {
+                    const zip = new JSZip();
+                    for (const r of evaluationResults) {
+                        const a = await exportSingleStudent(r, exportFormat);
+                        zip.file(a.filename, a.blob);
+                    }
+                    const zipBlob = await zip.generateAsync({ type: 'blob' });
+                    downloadBlob(
+                        zipBlob,
+                        `Exam-Evaluations_${formatDateYYYYMMDD(new Date())}.zip`,
+                    );
+                }
+            } else {
+                const target = evaluationResults[exportTarget];
+                if (!target) throw new Error('Selected student not found.');
+                const a = await exportSingleStudent(target, exportFormat);
+                downloadBlob(a.blob, a.filename);
+            }
+        } catch (e: any) {
+            console.error('Evaluation export error:', e);
+            alert(`Export failed: ${e?.message || 'Unknown error'}`);
+        } finally {
+            setExporting(false);
+        }
+    };
+
+    const expandAll = () => {
+        const next: Record<string, boolean> = {};
+        evaluationResults.forEach((r, idx) => {
+            next[r.studentId || String(idx)] = true;
+        });
+        setExpandedStudents(next);
+    };
+
+    const collapseAll = () => setExpandedStudents({});
+
+    const classStats = useMemo(() => {
+        if (evaluationResults.length === 0) return null;
+        const total = evaluationResults.length;
+        const avg =
+            evaluationResults.reduce((s, r) => s + (r.percentage || 0), 0) / total;
+        const passed = evaluationResults.filter((r) => (r.percentage || 0) >= 60)
+            .length;
+        const max = Math.max(...evaluationResults.map((r) => r.percentage || 0));
+        const min = Math.min(...evaluationResults.map((r) => r.percentage || 0));
+        return { total, avg, passed, max, min };
+    }, [evaluationResults]);
 
     const toggleStudent = (studentId: string) => {
         setExpandedStudents(prev => ({
@@ -338,13 +540,140 @@ export function ExamEvaluationModule() {
                 )}
             </div>
 
+            {/* Class Stats */}
+            {classStats && (
+                <Card>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-base">Class Summary</CardTitle>
+                        <CardDescription>{classStats.total} student(s) evaluated</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                            <div className="p-2 rounded-lg bg-muted/40">
+                                <p className="text-xs text-muted-foreground">Average</p>
+                                <p className={`text-xl font-bold ${getScoreColor(classStats.avg)}`}>
+                                    {classStats.avg.toFixed(1)}%
+                                </p>
+                            </div>
+                            <div className="p-2 rounded-lg bg-muted/40">
+                                <p className="text-xs text-muted-foreground">Pass Rate (≥60%)</p>
+                                <p className="text-xl font-bold">
+                                    {classStats.passed} / {classStats.total}
+                                </p>
+                            </div>
+                            <div className="p-2 rounded-lg bg-muted/40">
+                                <p className="text-xs text-muted-foreground">Highest</p>
+                                <p className="text-xl font-bold text-emerald-600">
+                                    {classStats.max.toFixed(1)}%
+                                </p>
+                            </div>
+                            <div className="p-2 rounded-lg bg-muted/40">
+                                <p className="text-xs text-muted-foreground">Lowest</p>
+                                <p className="text-xl font-bold text-red-600">
+                                    {classStats.min.toFixed(1)}%
+                                </p>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Export Panel */}
+            {evaluationResults.length > 0 && (
+                <Card className="border-indigo-200 dark:border-indigo-800 bg-gradient-to-br from-indigo-50/50 to-sky-50/50 dark:from-indigo-950/20 dark:to-sky-950/20">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base flex items-center gap-2">
+                            <Download className="w-4 h-4" />
+                            Export Evaluations
+                        </CardTitle>
+                        <CardDescription>
+                            Download grading reports as Word or PDF (multiple students get zipped automatically).
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="flex flex-wrap items-end gap-3">
+                            <div>
+                                <label className="text-xs text-muted-foreground block mb-1">Format</label>
+                                <select
+                                    value={exportFormat}
+                                    onChange={(e) => setExportFormat(e.target.value as ExamEvalFormat)}
+                                    className="text-sm border rounded-md px-3 py-2 bg-background"
+                                >
+                                    <option value="docx">Word (.docx)</option>
+                                    <option value="pdf">PDF (.pdf)</option>
+                                </select>
+                            </div>
+                            <div className="min-w-[180px]">
+                                <label className="text-xs text-muted-foreground block mb-1">Target</label>
+                                <select
+                                    value={exportTarget === 'all' ? 'all' : String(exportTarget)}
+                                    onChange={(e) => {
+                                        const v = e.target.value;
+                                        setExportTarget(v === 'all' ? 'all' : Number(v));
+                                    }}
+                                    className="text-sm border rounded-md px-3 py-2 bg-background w-full"
+                                >
+                                    <option value="all">
+                                        All students ({evaluationResults.length})
+                                    </option>
+                                    {evaluationResults.map((r, idx) => (
+                                        <option key={`${r.studentId || 'student'}-${idx}`} value={idx}>
+                                            {r.studentName || r.studentId || `Student ${idx + 1}`}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <Button
+                                onClick={handleExport}
+                                disabled={exporting}
+                                className="cursor-pointer"
+                            >
+                                {exporting ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        Exporting...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Download className="w-4 h-4 mr-2" />
+                                        Export
+                                    </>
+                                )}
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
             {/* Results */}
             {evaluationResults.length > 0 && (
                 <div className="space-y-4">
-                    <h2 className="text-lg font-semibold flex items-center gap-2">
-                        <ClipboardCheck className="w-5 h-5" />
-                        Evaluation Results
-                    </h2>
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                            <ClipboardCheck className="w-5 h-5" />
+                            Evaluation Results
+                        </h2>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={expandAll}
+                                className="cursor-pointer"
+                            >
+                                <ChevronsUpDown className="w-4 h-4 mr-1" />
+                                Expand all
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={collapseAll}
+                                className="cursor-pointer"
+                            >
+                                <ChevronsDownUp className="w-4 h-4 mr-1" />
+                                Collapse all
+                            </Button>
+                        </div>
+                    </div>
                     
                     {evaluationResults.map((result, resultIndex) => (
                         <Card key={result.studentId || resultIndex} className="overflow-hidden">

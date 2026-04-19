@@ -77,7 +77,7 @@ export function LectureRehearsalModule() {
     const [copied, setCopied] = useState(false);
     const [audienceLevel, setAudienceLevel] = useState<'beginner' | 'intermediate'>('beginner');
     const [targetMinutes, setTargetMinutes] = useState<number>(45);
-    const [format, setFormat] = useState<'docx' | 'pptx'>('docx');
+    const [format, setFormat] = useState<'docx' | 'pdf' | 'pptx'>('docx');
     const [exporting, setExporting] = useState(false);
     const [progress, setProgress] = useState<{ current: number; total: number; message: string } | null>(null);
     const [exportTarget, setExportTarget] = useState<'all' | number>(0);
@@ -737,8 +737,9 @@ export function LectureRehearsalModule() {
                                 onChange={(e) => setFormat(e.target.value as any)}
                                 className="flex h-9 rounded-md border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-900/40 px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500"
                             >
-                                <option value="docx">DOCX</option>
-                                <option value="pptx">PPTX</option>
+                                <option value="docx">Word (.docx)</option>
+                                <option value="pdf">PDF (.pdf)</option>
+                                <option value="pptx">PowerPoint (.pptx)</option>
                             </select>
                             <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
                                 {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Export'}

@@ -286,18 +286,36 @@ async function generatePdf(payload: {
         
         console.log(`[PDF Export] Language detected: ${payload.languageLabel} -> variant: ${variant}, font: ${filename}`);
 
-        // 2) Cache downloaded font locally
-        const cacheDir = path.join(process.cwd(), '.cache', 'fonts');
+        // 2) Cache downloaded font locally.
+        //    On Vercel/serverless the project root is read-only; only `/tmp` is writable.
+        //    We try the dev-time `.cache/fonts` first (if it exists, e.g. shipped with the
+        //    project), then fall back to `/tmp/fonts` for runtime caching across warm invocations.
+        const localCacheDir = path.join(process.cwd(), '.cache', 'fonts');
+        const tmpCacheDir = path.join('/tmp', 'fonts');
+        const candidatePaths = [
+            path.join(localCacheDir, filename),
+            path.join(tmpCacheDir, filename),
+        ];
+        for (const cp of candidatePaths) {
+            try {
+                const buf = await fs.readFile(cp);
+                console.log(`[PDF Export] Using cached font: ${cp}`);
+                return new Uint8Array(buf);
+            } catch {
+                /* try next */
+            }
+        }
+        console.log(`[PDF Export] Font not cached, will download: ${filename}`);
+
+        // Pick a writable cache dir. Prefer /tmp on serverless, fall back to local.
+        const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+        const cacheDir = isServerless ? tmpCacheDir : localCacheDir;
         const cachePath = path.join(cacheDir, filename);
         try {
-            const buf = await fs.readFile(cachePath);
-            console.log(`[PDF Export] Using cached font: ${cachePath}`);
-            return new Uint8Array(buf);
-        } catch {
-            console.log(`[PDF Export] Font not cached, will download: ${filename}`);
+            await fs.mkdir(cacheDir, { recursive: true });
+        } catch (e: any) {
+            console.warn(`[PDF Export] Failed to create cache dir ${cacheDir}: ${e?.message || e}`);
         }
-
-        await fs.mkdir(cacheDir, { recursive: true });
 
         // 3) Download an OTF that supports CJK
         // Note: Google Fonts web endpoints are woff2; we need OTF/TTF for pdf-lib.
@@ -343,8 +361,14 @@ async function generatePdf(payload: {
         }
         
         const u8 = new Uint8Array(ab);
-        await fs.writeFile(cachePath, Buffer.from(u8));
-        console.log(`[PDF Export] Font cached to: ${cachePath}`);
+        try {
+            await fs.writeFile(cachePath, Buffer.from(u8));
+            console.log(`[PDF Export] Font cached to: ${cachePath}`);
+        } catch (e: any) {
+            // On read-only filesystems we just skip caching; we still return the bytes
+            // so PDF generation succeeds. Warm invocations will simply re-download.
+            console.warn(`[PDF Export] Could not write font cache (${cachePath}): ${e?.message || e}`);
+        }
         return u8;
     };
 
