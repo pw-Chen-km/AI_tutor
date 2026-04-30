@@ -15,6 +15,7 @@ import { gatherWebSources } from '@/lib/web-search/web-search';
 import { recordUsage } from '@/lib/payments/usage-tracker';
 import OpenAI from 'openai';
 import { jsonrepair } from 'jsonrepair';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120; // 120 seconds timeout (increased for web search)
@@ -139,13 +140,14 @@ export async function POST(req: NextRequest) {
       numberOfItems,
       context,
       taskParams,
-      llmConfig,
+      llmConfig: rawLLMConfig,
       languageConfig,
       subject,
       includeWebResources, // Get from body
       action = 'generate', // 'generate' or 'regenerate'
       originalItem, // for regenerate action
     } = body;
+    const llmConfig = getActiveLLMConfig(rawLLMConfig);
 
     // Validate web search access
     if (includeWebResources && !hasWebSearchAccess) {

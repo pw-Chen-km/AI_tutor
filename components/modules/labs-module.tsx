@@ -20,6 +20,7 @@ import { CodeBlock } from '@/components/shared/code-block';
 import { MixedContent } from '@/components/shared/mixed-content';
 import { VariantSelector } from '@/components/shared/variant-selector';
 import { SourceSelector } from '@/components/shared/source-selector';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 // Helper function to check if a problem type is coding-related
 function isCodingType(format: string | undefined): boolean {
@@ -89,6 +90,7 @@ export function LabsModule() {
     );
     const primaryLanguage = languageConfig?.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
+    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
     const subjectConfig = useMemo(() => getSubjectConfig(subject), [subject]);
     const labTypes = useMemo(() => getLabTypes(subject, customQuestionTypes?.labs), [subject, customQuestionTypes?.labs]);
@@ -139,7 +141,7 @@ export function LabsModule() {
         setDisplayedVariant(prev => ({ ...prev, [itemId]: variantId }));
     };
     const handleGenerateSimilar = async (index: number) => {
-        if (!llmConfig.apiKey) {
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key first.');
             return;
         }
@@ -154,9 +156,9 @@ export function LabsModule() {
                     originalItem: originalLab,
                     moduleType: 'labs',
                     llmConfig: {
-                        apiKey: llmConfig.apiKey,
-                        baseURL: llmConfig.baseURL,
-                        model: llmConfig.model,
+                        apiKey: activeLLMConfig.apiKey,
+                        baseURL: activeLLMConfig.baseURL,
+                        model: activeLLMConfig.model,
                     },
                     primaryLanguage,
                     secondaryLanguage,
@@ -260,7 +262,7 @@ export function LabsModule() {
             return;
         }
 
-        if (!llmConfig.apiKey) {
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key in the settings.');
             return;
         }
@@ -284,7 +286,7 @@ export function LabsModule() {
                         availableFiles: contextFiles.map((f) => f.name),
                         sourceDocuments,
                     },
-                    llmConfig,
+                    llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
                     subject,
                     includeWebResources: includeWebResources || false,
@@ -381,7 +383,7 @@ export function LabsModule() {
 
     const handleRegenerate = async (index: number) => {
         if (contextFiles.length === 0) return;
-        if (!llmConfig.apiKey) return;
+        if (!activeLLMConfig.apiKey) return;
         const target = safeLabs[index];
         if (!target) return;
 
@@ -404,7 +406,7 @@ export function LabsModule() {
                         availableFiles: contextFiles.map((f) => f.name),
                         sourceDocuments,
                     },
-                    llmConfig,
+                    llmConfig: activeLLMConfig,
                     languageConfig: {
                         primaryLanguage,
                         secondaryLanguage,
@@ -463,7 +465,7 @@ export function LabsModule() {
                                     subject,
                                     sourceDocuments,
                                 },
-                                llmConfig,
+                                llmConfig: activeLLMConfig,
                                 languageConfig: {
                                     primaryLanguage,
                                     secondaryLanguage,
@@ -762,7 +764,7 @@ export function LabsModule() {
                                                                 availableFiles: [selectedFile],
                                                                 sourceDocuments,
                                                             },
-                                                            llmConfig,
+                                                            llmConfig: activeLLMConfig,
                                                             languageConfig: {
                                                                 primaryLanguage,
                                                                 secondaryLanguage,

@@ -19,6 +19,7 @@ import { VariantSelector } from '@/components/shared/variant-selector';
 import { CodeBlock } from '@/components/shared/code-block';
 import { MixedContent } from '@/components/shared/mixed-content';
 import { SourceSelector } from '@/components/shared/source-selector';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 interface Drill {
     number?: number;
@@ -72,6 +73,7 @@ export function DrillsModule() {
     const [displayedVariant, setDisplayedVariant] = useState<Record<string, string>>({});
     const primaryLanguage = languageConfig.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig.secondaryLanguage || 'none';
+    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
     // Get variants for drills
     const drillVariants = variants?.drills || {};
@@ -127,7 +129,8 @@ export function DrillsModule() {
             return;
         }
 
-        if (!llmConfig.apiKey) {
+        const activeLLMConfig = getActiveLLMConfig(llmConfig);
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key in the settings.');
             return;
         }
@@ -151,7 +154,7 @@ export function DrillsModule() {
                         availableFiles: contextFiles.map((f) => f.name),
                         sourceDocuments,
                     },
-                    llmConfig,
+                    llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
                     subject,
                     includeWebResources: false,
@@ -284,7 +287,8 @@ export function DrillsModule() {
 
     const handleRegenerate = async (index: number) => {
         if (contextFiles.length === 0) return;
-        if (!llmConfig.apiKey) return;
+        const activeLLMConfig = getActiveLLMConfig(llmConfig);
+        if (!activeLLMConfig.apiKey) return;
         const target = drills?.[index];
         if (!target) return;
 
@@ -306,7 +310,7 @@ export function DrillsModule() {
                         subject,
                         sourceDocuments,
                     },
-                    llmConfig,
+                    llmConfig: activeLLMConfig,
                     languageConfig: {
                         primaryLanguage,
                         secondaryLanguage,
@@ -398,7 +402,7 @@ export function DrillsModule() {
                                     subject,
                                     sourceDocuments,
                                 },
-                                llmConfig,
+                                llmConfig: activeLLMConfig,
                                 languageConfig: {
                                     primaryLanguage,
                                     secondaryLanguage,
@@ -432,7 +436,8 @@ export function DrillsModule() {
 
     // Generate similar question (variant)
     const handleGenerateSimilar = async (itemId: string, originalItem: any) => {
-        if (!llmConfig.apiKey) {
+        const activeLLMConfig = getActiveLLMConfig(llmConfig);
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key first.');
             return;
         }
@@ -446,9 +451,9 @@ export function DrillsModule() {
                     originalItem,
                     moduleType: 'drills',
                     llmConfig: {
-                        apiKey: llmConfig.apiKey,
-                        baseURL: llmConfig.baseURL,
-                        model: llmConfig.model,
+                        apiKey: activeLLMConfig.apiKey,
+                        baseURL: activeLLMConfig.baseURL,
+                        model: activeLLMConfig.model,
                     },
                     primaryLanguage,
                     secondaryLanguage,
@@ -837,7 +842,7 @@ export function DrillsModule() {
                                                                 availableFiles: [selectedFile],
                                                                 sourceDocuments,
                                                             },
-                                                            llmConfig,
+                                                            llmConfig: activeLLMConfig,
                                                             languageConfig: {
                                                                 primaryLanguage,
                                                                 secondaryLanguage,

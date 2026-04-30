@@ -38,6 +38,7 @@ import { QuestionTypeMix } from '@/components/shared/question-type-mix';
 import { ExportPanel, type ExportItem } from '@/components/shared/export-panel';
 import { VariantSelector } from '@/components/shared/variant-selector';
 import { SourceSelector } from '@/components/shared/source-selector';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 // Format type display with title case
 function formatTypeDisplay(format: string | undefined): string {
@@ -105,6 +106,7 @@ export function ExamsModule() {
     );
     const primaryLanguage = languageConfig?.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
+    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
     const subjectConfig = useMemo(() => getSubjectConfig(subject), [subject]);
     const examTypes = useMemo(() => getExamTypes(subject, customQuestionTypes?.exams), [subject, customQuestionTypes?.exams]);
     const [typeWeights, setTypeWeights] = useState<Record<string, number>>(() => defaultWeights(examTypes));
@@ -150,7 +152,7 @@ export function ExamsModule() {
         setDisplayedVariant(prev => ({ ...prev, [itemId]: variantId }));
     };
     const handleGenerateSimilar = async (index: number) => {
-        if (!llmConfig.apiKey) {
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key first.');
             return;
         }
@@ -165,9 +167,9 @@ export function ExamsModule() {
                     originalItem: originalQuestion,
                     moduleType: 'exams',
                     llmConfig: {
-                        apiKey: llmConfig.apiKey,
-                        baseURL: llmConfig.baseURL,
-                        model: llmConfig.model,
+                        apiKey: activeLLMConfig.apiKey,
+                        baseURL: activeLLMConfig.baseURL,
+                        model: activeLLMConfig.model,
                     },
                     primaryLanguage,
                     secondaryLanguage,
@@ -261,7 +263,7 @@ export function ExamsModule() {
             return;
         }
 
-        if (!llmConfig.apiKey) {
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key in the settings.');
             return;
         }
@@ -287,7 +289,7 @@ export function ExamsModule() {
                         selectedChapters: selectedChapters.length > 0 ? selectedChapters : undefined,
                         sourceDocuments,
                     },
-                    llmConfig,
+                    llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
                     subject,
                     includeWebResources: includeWebResources || false,
@@ -810,7 +812,7 @@ export function ExamsModule() {
                                                 onClick={async () => {
                                                     if (!exam) return;
                                                     if (contextFiles.length === 0) return;
-                                                    if (!llmConfig.apiKey) return;
+                                                    if (!activeLLMConfig.apiKey) return;
                                                     const target = exam.questions?.[index];
                                                     if (!target) return;
 
@@ -833,7 +835,7 @@ export function ExamsModule() {
                                                                     availableFiles: contextFiles.map((f) => f.name),
                                                                     sourceDocuments,
                                                                 },
-                                                                llmConfig,
+                                                            llmConfig: activeLLMConfig,
                                                                 languageConfig: {
                                                                     primaryLanguage,
                                                                     secondaryLanguage,
@@ -922,7 +924,7 @@ export function ExamsModule() {
                                                                                 subject,
                                                                                 sourceDocuments,
                                                                             },
-                                                                            llmConfig,
+                                                            llmConfig: activeLLMConfig,
                                                                             languageConfig: {
                                                                                 primaryLanguage,
                                                                                 secondaryLanguage,
@@ -1031,7 +1033,7 @@ export function ExamsModule() {
                                                                     availableFiles: [selectedFile],
                                                                     sourceDocuments,
                                                                 },
-                                                                llmConfig,
+                                                                llmConfig: activeLLMConfig,
                                                                 languageConfig: {
                                                                     primaryLanguage,
                                                                     secondaryLanguage,

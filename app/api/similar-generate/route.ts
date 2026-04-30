@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth/config';
 import { recordUsage } from '@/lib/payments/usage-tracker';
 import { jsonrepair } from 'jsonrepair';
 import promptTemplates from '@/lib/llm/prompt-templates.json';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 export const runtime = 'nodejs';
 
@@ -28,7 +29,8 @@ export async function POST(req: NextRequest) {
         }
 
         const body: SimilarGenerateRequest = await req.json();
-        const { originalItem, moduleType, llmConfig, primaryLanguage, secondaryLanguage } = body;
+        const { originalItem, moduleType, llmConfig: rawLLMConfig, primaryLanguage, secondaryLanguage } = body;
+        const llmConfig = getActiveLLMConfig(rawLLMConfig);
 
         if (!originalItem || !moduleType || !llmConfig?.apiKey) {
             return NextResponse.json(

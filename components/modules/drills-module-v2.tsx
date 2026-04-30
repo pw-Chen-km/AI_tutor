@@ -23,6 +23,7 @@ import { CodeBlock } from '@/components/shared/code-block';
 import { MixedContent } from '@/components/shared/mixed-content';
 import { defaultWeights, getDrillsTypes, getSubjectConfig, weightsToCounts } from '@/lib/subjects';
 import { ensureMarkdownCodeFences, wrapSolutionAsCodeIfCoding } from '@/lib/llm/format';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 // Helper function to check if a problem type is coding-related
 function isCodingType(format: string | undefined): boolean {
@@ -56,6 +57,7 @@ export function DrillsModuleV2() {
 
   const primaryLanguage = languageConfig.primaryLanguage;
   const secondaryLanguage = languageConfig.secondaryLanguage;
+  const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
   const subjectConfig = getSubjectConfig(subject);
   const drillsTypes = useMemo(() => getDrillsTypes(subject, customQuestionTypes?.drills), [subject, customQuestionTypes?.drills]);
   
@@ -81,7 +83,7 @@ export function DrillsModuleV2() {
       return;
     }
 
-    if (!llmConfig.apiKey) {
+    if (!activeLLMConfig.apiKey) {
       alert('Please configure your LLM API key in settings.');
       return;
     }
@@ -104,7 +106,7 @@ export function DrillsModuleV2() {
             typeCounts,
             availableFiles: contextFiles.map((f) => f.name),
           },
-          llmConfig,
+          llmConfig: activeLLMConfig,
           languageConfig,
           subject,
           includeWebResources,
@@ -172,7 +174,7 @@ export function DrillsModuleV2() {
    */
   const handleRegenerate = async (index: number) => {
     if (contextFiles.length === 0) return;
-    if (!llmConfig.apiKey) return;
+    if (!activeLLMConfig.apiKey) return;
     
     const target = drills?.[index];
     if (!target) return;
@@ -193,7 +195,7 @@ export function DrillsModuleV2() {
             minutesPerProblem,
             subject,
           },
-          llmConfig,
+          llmConfig: activeLLMConfig,
           languageConfig,
           subject,
         }),

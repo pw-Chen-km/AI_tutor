@@ -28,6 +28,7 @@ import { QuestionTypeMix } from '@/components/shared/question-type-mix';
 import { ExportPanel, type ExportItem } from '@/components/shared/export-panel';
 import { VariantSelector } from '@/components/shared/variant-selector';
 import { SourceSelector } from '@/components/shared/source-selector';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 // Format type display with title case
 function formatTypeDisplay(format: string | undefined): string {
@@ -103,6 +104,7 @@ export function HomeworkModule() {
     );
     const primaryLanguage = languageConfig?.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
+    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
     // Variant helpers
     const getItemId = (index: number) => `homework-${index + 1}`;
@@ -145,7 +147,7 @@ export function HomeworkModule() {
         setDisplayedVariant(prev => ({ ...prev, [itemId]: variantId }));
     };
     const handleGenerateSimilar = async (index: number) => {
-        if (!llmConfig.apiKey) {
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key first.');
             return;
         }
@@ -160,9 +162,9 @@ export function HomeworkModule() {
                     originalItem: originalProblem,
                     moduleType: 'homework',
                     llmConfig: {
-                        apiKey: llmConfig.apiKey,
-                        baseURL: llmConfig.baseURL,
-                        model: llmConfig.model,
+                        apiKey: activeLLMConfig.apiKey,
+                        baseURL: activeLLMConfig.baseURL,
+                        model: activeLLMConfig.model,
                     },
                     primaryLanguage,
                     secondaryLanguage,
@@ -261,7 +263,7 @@ export function HomeworkModule() {
             return;
         }
 
-        if (!llmConfig.apiKey) {
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key in the settings.');
             return;
         }
@@ -286,7 +288,7 @@ export function HomeworkModule() {
                         sourceDocuments,
                         selectedChapters: selectedChapters.length > 0 ? selectedChapters : undefined,
                     },
-                    llmConfig,
+                    llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
                     subject,
                     includeWebResources: includeWebResources || false,
@@ -460,7 +462,7 @@ export function HomeworkModule() {
     const handleRegenerateProblem = async (index: number) => {
         if (!homework) return;
         if (contextFiles.length === 0) return;
-        if (!llmConfig.apiKey) return;
+        if (!activeLLMConfig.apiKey) return;
         const target = homework.problems?.[index];
         if (!target) return;
 
@@ -483,7 +485,7 @@ export function HomeworkModule() {
                         availableFiles: contextFiles.map((f) => f.name),
                         sourceDocuments,
                     },
-                    llmConfig,
+                    llmConfig: activeLLMConfig,
                     languageConfig: {
                         primaryLanguage,
                         secondaryLanguage,
@@ -557,7 +559,7 @@ export function HomeworkModule() {
                                     subject,
                                     sourceDocuments,
                                 },
-                                llmConfig,
+                                llmConfig: activeLLMConfig,
                                 languageConfig: {
                                     primaryLanguage,
                                     secondaryLanguage,
@@ -994,7 +996,7 @@ export function HomeworkModule() {
                                                                 availableFiles: [selectedFile],
                                                                 sourceDocuments,
                                                             },
-                                                            llmConfig,
+                                                            llmConfig: activeLLMConfig,
                                                             languageConfig: {
                                                                 primaryLanguage,
                                                                 secondaryLanguage,

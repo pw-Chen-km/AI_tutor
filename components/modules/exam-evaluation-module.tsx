@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Sparkles, Loader2, FileText, ClipboardCheck, CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronUp, Download, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { CodeBlock } from '@/components/shared/code-block';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 type ExamEvalFormat = 'docx' | 'pdf';
 
@@ -66,6 +67,7 @@ export function ExamEvaluationModule() {
     // (using index avoids collisions when two students have the same name / no id).
     const [exportTarget, setExportTarget] = useState<'all' | number>('all');
     const [exporting, setExporting] = useState(false);
+    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
     const handleEvaluate = async () => {
         if (teacherFiles.length === 0) {
@@ -78,7 +80,7 @@ export function ExamEvaluationModule() {
             return;
         }
 
-        if (!llmConfig.apiKey) {
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key in the settings.');
             return;
         }
@@ -104,7 +106,7 @@ export function ExamEvaluationModule() {
                     teacherContext,
                     studentFiles: studentFilesArray,
                     subject,
-                    llmConfig,
+                    llmConfig: activeLLMConfig,
                     languageConfig,
                 }),
             });

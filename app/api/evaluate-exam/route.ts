@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60; // 60 seconds timeout
@@ -271,7 +272,8 @@ Return the evaluation as a JSON object following the specified format.`;
 export async function POST(req: NextRequest) {
     try {
         const body: EvaluationRequest = await req.json();
-        const { teacherContext, studentFiles, subject, llmConfig, languageConfig } = body;
+        const { teacherContext, studentFiles, subject, llmConfig: rawLLMConfig, languageConfig } = body;
+        const llmConfig = getActiveLLMConfig(rawLLMConfig);
 
         if (!teacherContext) {
             return NextResponse.json(

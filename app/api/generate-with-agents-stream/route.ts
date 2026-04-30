@@ -15,6 +15,7 @@ import { gatherWebSources } from '@/lib/web-search/web-search';
 import { recordUsage } from '@/lib/payments/usage-tracker';
 import OpenAI from 'openai';
 import { jsonrepair } from 'jsonrepair';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -116,11 +117,12 @@ export async function POST(req: NextRequest) {
           numberOfItems,
           context,
           taskParams,
-          llmConfig,
+          llmConfig: rawLLMConfig,
           languageConfig,
           subject,
           includeWebResources,
         } = body;
+        const llmConfig = getActiveLLMConfig(rawLLMConfig);
 
         if (!moduleType || !llmConfig?.apiKey) {
           send(controller, { type: 'error', message: 'moduleType and LLM API key are required' });

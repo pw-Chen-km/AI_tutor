@@ -13,6 +13,7 @@ import { Sparkles, Copy, Check, Loader2, Edit2, Eye, Languages } from 'lucide-re
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 
 type LectureResult = {
     title?: string;
@@ -72,6 +73,7 @@ export function LectureRehearsalModule() {
 
     const primaryLanguage = languageConfig?.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
+    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
     const [loading, setLoading] = useState(false);
     const [copied, setCopied] = useState(false);
@@ -160,7 +162,7 @@ export function LectureRehearsalModule() {
             alert('Please upload at least one file.');
             return;
         }
-        if (!llmConfig.apiKey) {
+        if (!activeLLMConfig.apiKey) {
             alert('Please configure your API key in LLM Settings.');
             return;
         }
@@ -170,16 +172,16 @@ export function LectureRehearsalModule() {
         
         try {
             // Get current provider's API key, or use the deprecated apiKey field
-            const currentApiKey = llmConfig.apiKeys?.[llmConfig.provider] || llmConfig.apiKey || '';
+            const currentApiKey = activeLLMConfig.apiKey;
             
             const res = await fetch('/api/lecture-rehearsal-stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     apiKey: currentApiKey,
-                    baseURL: llmConfig.baseURL,
-                    model: llmConfig.model,
-                    provider: llmConfig.provider,
+                    baseURL: activeLLMConfig.baseURL,
+                    model: activeLLMConfig.model,
+                    provider: activeLLMConfig.provider,
                     // Send all available API keys for parallel processing with multiple LLMs
                     apiKeys: llmConfig.apiKeys,
                     // Per-provider model names (used when building LLM pool)
