@@ -1,5 +1,22 @@
 // Client-side file reading utilities
 
+// Vercel serverless requests are rejected before our API route runs when the
+// multipart body is too large. Keep the client-side limit below that ceiling.
+const SERVER_PARSE_FILE_LIMIT_BYTES = 4 * 1024 * 1024;
+
+function formatBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
+}
+
+function buildTooLargeMessage(file: File): string {
+    return [
+        `檔案「${file.name}」大小為 ${formatBytes(file.size)}，超過目前線上解析上限 ${formatBytes(SERVER_PARSE_FILE_LIMIT_BYTES)}。`,
+        '請先壓縮檔案、拆成較小檔案，或只上傳需要出題/產生講稿的頁面後再試一次。',
+    ].join('\n');
+}
+
 export async function readTextFile(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -85,6 +102,10 @@ export async function parseFileForEvaluation(file: File): Promise<string> {
 }
 
 async function uploadAndParse(file: File): Promise<string> {
+    if (file.size > SERVER_PARSE_FILE_LIMIT_BYTES) {
+        throw new Error(buildTooLargeMessage(file));
+    }
+
     const formData = new FormData();
     formData.append('file', file);
 
@@ -102,6 +123,9 @@ async function uploadAndParse(file: File): Promise<string> {
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
+            if (response.status === 413) {
+                throw new Error(buildTooLargeMessage(file));
+            }
             throw new Error(errorData.error || `Failed to parse file (status: ${response.status})`);
         }
 

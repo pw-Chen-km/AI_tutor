@@ -8,6 +8,23 @@ import { Upload, File, X, FileText, FileSpreadsheet, FolderOpen, Globe, Graduati
 import { useCallback, useState, useEffect } from 'react';
 import { parseFile, parseFileForEvaluation } from '@/lib/parsers/file-parser';
 
+const RAW_FILE_API_LIMIT_BYTES = 3 * 1024 * 1024;
+
+function formatBytes(bytes: number): string {
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
+}
+
+function assertApiFileSize(file: File, action: string) {
+    if (file.size <= RAW_FILE_API_LIMIT_BYTES) return;
+    throw new Error(
+        [
+            `檔案「${file.name}」大小為 ${formatBytes(file.size)}，超過目前線上 ${action} 可處理上限 ${formatBytes(RAW_FILE_API_LIMIT_BYTES)}。`,
+            '請先壓縮檔案、拆成較小檔案，或只保留需要使用的頁面後再上傳。',
+        ].join('\n')
+    );
+}
+
 // File upload zone component
 function FileUploadZone({
     id,
@@ -255,6 +272,9 @@ export function ContextPanel() {
                     rejected.push(file.name);
                     continue;
                 }
+                if (ext === 'pptx' || ext === 'pdf') {
+                    assertApiFileSize(file, 'PDF/PPTX 上傳與生成');
+                }
                 const rawBase64 = (ext === 'pptx' || ext === 'pdf') ? arrayBufferToBase64(await file.arrayBuffer()) : undefined;
                 const content =
                     isLectureRehearsal && ext === 'pdf'
@@ -323,6 +343,7 @@ export function ContextPanel() {
         try {
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
+                assertApiFileSize(file, '考卷批改');
                 const content = await parseFileForEvaluation(file);
                 const rawBase64 = arrayBufferToBase64(await file.arrayBuffer());
 
@@ -353,6 +374,7 @@ export function ContextPanel() {
 
                 // Check if it's a ZIP or RAR archive
                 if (fileType === 'zip' || fileType === 'rar') {
+                    assertApiFileSize(file, '壓縮檔解壓縮');
                     // Extract archive and add each file as a separate student
                     const formData = new FormData();
                     formData.append('file', file);
@@ -420,6 +442,7 @@ export function ContextPanel() {
                     }
                 } else {
                     // Regular file - process normally
+                    assertApiFileSize(file, '考卷批改');
                     const content = await parseFileForEvaluation(file);
                     const rawBase64 = arrayBufferToBase64(await file.arrayBuffer());
 

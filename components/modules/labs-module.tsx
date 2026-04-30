@@ -304,6 +304,26 @@ export function LabsModule() {
 
             let buffer = '';
             let data: { results?: any[]; type?: string; message?: string; current?: number; total?: number } = {};
+            const processStreamLine = (line: string) => {
+                if (!line.startsWith('data: ')) return;
+                try {
+                    const parsed = JSON.parse(line.slice(6));
+                    if (parsed.type === 'progress') {
+                        setProgress({
+                            current: parsed.current ?? 0,
+                            total: parsed.total ?? numberOfProblems,
+                            message: parsed.message ?? 'Processing...',
+                        });
+                    } else if (parsed.type === 'complete') {
+                        data = parsed;
+                    } else if (parsed.type === 'error') {
+                        throw new Error(parsed.message || 'Generation failed');
+                    }
+                } catch (e) {
+                    if (e instanceof SyntaxError) return;
+                    throw e;
+                }
+            };
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -312,25 +332,11 @@ export function LabsModule() {
                 const lines = buffer.split('\n\n');
                 buffer = lines.pop() || '';
                 for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    try {
-                        const parsed = JSON.parse(line.slice(6));
-                        if (parsed.type === 'progress') {
-                            setProgress({
-                                current: parsed.current ?? 0,
-                                total: parsed.total ?? numberOfProblems,
-                                message: parsed.message ?? 'Processing...',
-                            });
-                        } else if (parsed.type === 'complete') {
-                            data = parsed;
-                        } else if (parsed.type === 'error') {
-                            throw new Error(parsed.message || 'Generation failed');
-                        }
-                    } catch (e) {
-                        if (e instanceof SyntaxError) continue;
-                        throw e;
-                    }
+                    processStreamLine(line);
                 }
+            }
+            if (buffer.trim()) {
+                processStreamLine(buffer.trim());
             }
 
             const results = data.results;
