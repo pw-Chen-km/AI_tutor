@@ -305,9 +305,10 @@ export function LabsModule() {
             let buffer = '';
             let data: { results?: any[]; type?: string; message?: string; current?: number; total?: number } = {};
             const processStreamLine = (line: string) => {
-                if (!line.startsWith('data: ')) return;
+                const normalizedLine = line.trim();
+                if (!normalizedLine.startsWith('data: ')) return;
                 try {
-                    const parsed = JSON.parse(line.slice(6));
+                    const parsed = JSON.parse(normalizedLine.slice(6));
                     if (parsed.type === 'progress') {
                         setProgress({
                             current: parsed.current ?? 0,
@@ -329,7 +330,7 @@ export function LabsModule() {
                 const { done, value } = await reader.read();
                 if (done) break;
                 buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n\n');
+                const lines = buffer.split(/\r?\n\r?\n/);
                 buffer = lines.pop() || '';
                 for (const line of lines) {
                     processStreamLine(line);

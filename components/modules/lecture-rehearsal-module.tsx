@@ -217,9 +217,10 @@ export function LectureRehearsalModule() {
             let streamError: string | null = null;
             
             const processLine = (line: string) => {
-                if (line.startsWith('data: ')) {
+                const normalizedLine = line.trim();
+                if (normalizedLine.startsWith('data: ')) {
                     try {
-                        const data = JSON.parse(line.slice(6));
+                        const data = JSON.parse(normalizedLine.slice(6));
                         
                         if (data.type === 'progress') {
                             setProgress({
@@ -235,7 +236,7 @@ export function LectureRehearsalModule() {
                         }
                     } catch (e: any) {
                         // Check if it's an API error message in the raw text
-                        const rawText = line.slice(6).trim();
+                        const rawText = normalizedLine.slice(6).trim();
                         if (rawText && (rawText.includes('503') || rawText.includes('overloaded') || rawText.includes('UNAVAILABLE'))) {
                             streamError = 'Gemini API is overloaded. Please wait a moment and try again.';
                         } else if (rawText && rawText.includes('error')) {
@@ -258,7 +259,7 @@ export function LectureRehearsalModule() {
                 if (done) break;
                 
                 buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n\n');
+                const lines = buffer.split(/\r?\n\r?\n/);
                 buffer = lines.pop() || '';
                 
                 for (const line of lines) {
