@@ -328,7 +328,7 @@ export default function AdminPage() {
   const providerPresets: Record<string, { baseURL: string; defaultModel: string }> = {
     openai: {
       baseURL: 'https://api.openai.com/v1',
-      defaultModel: 'gpt-4o'
+      defaultModel: 'gpt-5.5'
     },
     gemini: {
       baseURL: 'https://generativelanguage.googleapis.com',
@@ -1035,7 +1035,7 @@ export default function AdminPage() {
                           setLLMConfigChanged(true);
                           setLLMSaveSuccess(false);
                         }}
-                        placeholder={p === 'openai' ? 'gpt-4o' : p === 'gemini' ? 'gemini-1.5-flash' : p === 'deepseek' ? 'deepseek-chat' : p === 'anthropic' ? 'claude-3-5-sonnet-20241022' : 'model name'}
+                        placeholder={p === 'openai' ? 'gpt-5.5' : p === 'gemini' ? 'gemini-1.5-flash' : p === 'deepseek' ? 'deepseek-chat' : p === 'anthropic' ? 'claude-3-5-sonnet-20241022' : 'model name'}
                       />
                     </div>
                   );

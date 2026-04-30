@@ -61,7 +61,7 @@ Return ONLY a JSON array like: ["query1", "query2", "query3"]`;
       return Array.isArray(parsed) ? parsed.filter((q: any) => typeof q === 'string') : [];
     } else {
       const response = await client.chat.completions.create({
-        model: model || 'gpt-4',
+        model: model || 'gpt-5.5',
         messages: [
           { role: 'system', content: 'Return ONLY a JSON array of search queries.' },
           { role: 'user', content: prompt },
@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
               context,
               apiKey: llmConfig.apiKey,
               baseURL: llmConfig.baseURL || 'https://api.openai.com/v1',
-              model: llmConfig.model || 'gpt-4',
+              model: llmConfig.model || 'gpt-5.5',
             });
             if (queries.length > 0) {
               webSources = await gatherWebSources({
@@ -164,7 +164,7 @@ export async function POST(req: NextRequest) {
           llmConfig: {
             apiKey: llmConfig.apiKey,
             baseURL: llmConfig.baseURL || 'https://api.openai.com/v1',
-            model: llmConfig.model || 'gpt-4',
+            model: llmConfig.model || 'gpt-5.5',
             provider: llmConfig.provider || 'openai',
           },
           languageConfig: {

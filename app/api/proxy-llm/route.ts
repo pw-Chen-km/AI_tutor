@@ -285,7 +285,7 @@ export async function POST(req: NextRequest) {
             });
 
             const response = await client.chat.completions.create({
-                model: model || 'gpt-4',
+                model: model || 'gpt-5.5',
                 messages: messages,
                 response_format: { type: "json_object" },
                 // gpt-5.4-mini may reject `max_tokens`; use `max_completion_tokens`.

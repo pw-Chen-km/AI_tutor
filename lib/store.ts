@@ -144,7 +144,7 @@ export const useStore = create<AppState>()(
                     custom: '',
                 },
                 baseURL: 'https://api.openai.com/v1',
-                model: 'gpt-4o',
+                model: 'gpt-5.5',
                 providerModels: {}, // per-provider model names for parallel processing
             },
             setLLMConfig: (config) =>

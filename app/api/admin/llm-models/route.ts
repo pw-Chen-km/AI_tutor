@@ -76,8 +76,8 @@ async function fetchOpenAIModels(apiKey?: string, baseURL?: string): Promise<{ v
     const chatModels = data.data
       .filter((model: any) => {
         const id = model.id.toLowerCase();
-        // Include GPT models and O1 models, exclude embedding, tts, whisper, dall-e
-        return (id.includes('gpt') || id.includes('o1') || id.includes('o3')) &&
+        // Include current GPT/reasoning chat models, exclude non-chat modalities.
+        return (id.startsWith('gpt-') || id.startsWith('o1') || id.startsWith('o3') || id.startsWith('o4')) &&
                !id.includes('instruct') &&
                !id.includes('embedding') &&
                !id.includes('realtime');
@@ -88,7 +88,7 @@ async function fetchOpenAIModels(apiKey?: string, baseURL?: string): Promise<{ v
       }))
       .sort((a: any, b: any) => {
         // Prioritize newer models
-        const priority = ['gpt-4o', 'o3', 'o1', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5'];
+        const priority = ['gpt-5.5', 'gpt-5.4', 'gpt-5', 'o4', 'o3', 'o1', 'gpt-4.1', 'gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5'];
         const aIndex = priority.findIndex(p => a.value.includes(p));
         const bIndex = priority.findIndex(p => b.value.includes(p));
         if (aIndex !== bIndex) return aIndex - bIndex;
@@ -104,8 +104,15 @@ async function fetchOpenAIModels(apiKey?: string, baseURL?: string): Promise<{ v
 
 function getOpenAIFallbackModels(): { value: string; label: string }[] {
   return [
-    { value: 'gpt-4o', label: 'GPT-4o (Latest)' },
+    { value: 'gpt-5.5', label: 'GPT-5.5 (Latest)' },
+    { value: 'gpt-5.4', label: 'GPT-5.4' },
+    { value: 'gpt-5.2', label: 'GPT-5.2' },
+    { value: 'gpt-4.1', label: 'GPT-4.1' },
+    { value: 'gpt-4o', label: 'GPT-4o' },
     { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast)' },
+    { value: 'o4-mini', label: 'O4 Mini (Reasoning)' },
+    { value: 'o3', label: 'O3 (Reasoning)' },
+    { value: 'o3-mini', label: 'O3 Mini (Reasoning)' },
     { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
     { value: 'gpt-4', label: 'GPT-4' },
     { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
@@ -281,11 +288,17 @@ function formatModelName(modelId: string, provider: string): string {
 
   // Provider-specific formatting
   if (provider === 'openai') {
+    if (modelId.includes('gpt-5.5')) return `GPT-5.5${modelId === 'gpt-5.5' ? '' : ` (${modelId.replace('gpt-5.5-', '')})`}`;
+    if (modelId.includes('gpt-5.4')) return `GPT-5.4${modelId === 'gpt-5.4' ? '' : ` (${modelId.replace('gpt-5.4-', '')})`}`;
+    if (modelId.includes('gpt-5')) return `GPT-5 (${modelId.replace('gpt-5-', '')})`;
+    if (modelId.includes('gpt-4.1')) return `GPT-4.1${modelId === 'gpt-4.1' ? '' : ` (${modelId.replace('gpt-4.1-', '')})`}`;
     if (modelId.includes('gpt-4o-mini')) return 'GPT-4o Mini';
     if (modelId.includes('gpt-4o')) return `GPT-4o (${modelId.replace('gpt-4o-', '')})`;
     if (modelId.includes('gpt-4-turbo')) return 'GPT-4 Turbo';
     if (modelId.includes('gpt-4')) return `GPT-4 (${modelId.replace('gpt-4-', '')})`;
     if (modelId.includes('gpt-3.5')) return 'GPT-3.5 Turbo';
+    if (modelId.includes('o4')) return modelId.toUpperCase().replace('-', ' ');
+    if (modelId.includes('o3')) return modelId.toUpperCase().replace('-', ' ');
     if (modelId.includes('o1')) return modelId.toUpperCase().replace('-', ' ');
   }
 

@@ -280,7 +280,7 @@ export abstract class BaseSkill implements AgentSkill {
           }
         } else {
           const response = await client.chat.completions.create({
-            model: model || 'gpt-4',
+            model: model || 'gpt-5.5',
             messages: messages,
             response_format: { type: "json_object" },
             temperature: options?.temperature,

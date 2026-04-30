@@ -81,7 +81,7 @@ type LLMProviderConfig = {
 
 // Default models and base URLs for each provider
 const LLM_PROVIDER_DEFAULTS: Record<string, { baseURL: string; model: string }> = {
-  openai: { baseURL: 'https://api.openai.com/v1', model: 'gpt-4o' },
+  openai: { baseURL: 'https://api.openai.com/v1', model: 'gpt-5.5' },
   gemini: { baseURL: 'https://generativelanguage.googleapis.com', model: 'gemini-1.5-flash' },
   anthropic: { baseURL: 'https://api.anthropic.com', model: 'claude-3-5-sonnet-20241022' },
   deepseek: { baseURL: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
@@ -402,7 +402,7 @@ export async function callLLMJson(params: {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       response = await client.chat.completions.create({
-        model: model || 'gpt-4',
+        model: model || 'gpt-5.5',
         messages,
         response_format: { type: 'json_object' },
         // Keep completion budgets bounded so requests do not reserve unnecessary TPM.

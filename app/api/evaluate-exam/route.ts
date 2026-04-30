@@ -67,7 +67,7 @@ async function evaluateSingleStudent(
     const primaryLang = languageConfig?.primaryLanguage || 'English';
     const secondaryLang = languageConfig?.secondaryLanguage || 'none';
     const baseURL = (llmConfig.baseURL || 'https://api.openai.com/v1').trim();
-    const model = (llmConfig.model || 'gpt-4').trim();
+    const model = (llmConfig.model || 'gpt-5.5').trim();
     const apiKey = llmConfig.apiKey;
     const isGemini = baseURL.includes('generativelanguage.googleapis.com') || model.includes('gemini');
 

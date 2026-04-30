@@ -99,7 +99,7 @@ export function Sidebar() {
         const presets: Record<string, { baseURL: string; model: string }> = {
             openai: {
                 baseURL: 'https://api.openai.com/v1',
-                model: 'gpt-4'
+                model: 'gpt-5.5'
             },
             gemini: {
                 baseURL: 'https://generativelanguage.googleapis.com',

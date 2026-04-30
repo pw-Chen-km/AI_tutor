@@ -22,6 +22,6 @@ export function getActiveLLMConfig(config: Partial<LLMConfig> | undefined | null
         },
         baseURL: config?.baseURL || 'https://api.openai.com/v1',
         providerModels: config?.providerModels || {},
-        model: config?.providerModels?.[provider] || config?.model || 'gpt-4o',
+        model: config?.providerModels?.[provider] || config?.model || 'gpt-5.5',
     };
 }
