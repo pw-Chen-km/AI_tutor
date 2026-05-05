@@ -65,9 +65,9 @@ export const DEFAULT_MARGINS = {
 // ============================================
 
 export const FONTS = {
-  default: 'Times New Roman',
+  default: 'Aptos',
   code: 'Consolas',
-  chinese: 'Microsoft YaHei',
+  chinese: 'Microsoft JhengHei',
 };
 
 export const FONT_SIZES = {
@@ -97,10 +97,10 @@ export const SPACING = {
 
 export const BORDERS = {
   box: {
-    top: { style: BorderStyle.SINGLE, size: 1, color: '000000' },
-    bottom: { style: BorderStyle.SINGLE, size: 1, color: '000000' },
-    left: { style: BorderStyle.SINGLE, size: 1, color: '000000' },
-    right: { style: BorderStyle.SINGLE, size: 1, color: '000000' },
+    top: { style: BorderStyle.SINGLE, size: 1, color: 'CBD5E1' },
+    bottom: { style: BorderStyle.SINGLE, size: 1, color: 'CBD5E1' },
+    left: { style: BorderStyle.SINGLE, size: 1, color: 'CBD5E1' },
+    right: { style: BorderStyle.SINGLE, size: 1, color: 'CBD5E1' },
   },
   none: {
     top: { style: BorderStyle.NIL },

@@ -64,6 +64,17 @@ interface ExportExamRequest {
   templateDocxBase64?: string;
 }
 
+function buildDownloadFilename(course: string, examType: string, extension: string) {
+  const cleanPart = (value: string, fallback: string) =>
+    (value || fallback)
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80) || fallback;
+
+  return `${cleanPart(course, 'Course')}_${cleanPart(examType, 'Exam')}.${extension}`;
+}
+
 // ============================================
 // PDF Generator for Formal Exam Papers
 // (Matches Word export structure and content)
@@ -829,12 +840,14 @@ export async function POST(req: NextRequest) {
       examContent = body.examContent;
     } else if (body.mode === 'convert' && body.items) {
       // Convert legacy items to exam format
-      const options: ConvertToExamOptions = body.convertOptions || {
+      const options: ConvertToExamOptions = {
         course: body.course || 'Course Name',
         institution: body.institution || 'University',
         examType: body.examType || 'Examination',
         durationMinutes: body.durationMinutes || 120,
         instructions: body.instructions,
+        normalizeToTotal: false,
+        ...(body.convertOptions || {}),
       };
       
       examContent = convertToExamContent(body.items, options);
@@ -882,7 +895,8 @@ export async function POST(req: NextRequest) {
     await recordExport(session.user.id);
     
     // Return as downloadable file
-    const filename = `${examContent.metadata.course.replace(/[^a-zA-Z0-9]/g, '_')}_${examContent.metadata.examType.replace(/[^a-zA-Z0-9]/g, '_')}.${fileExtension}`;
+    const filename = buildDownloadFilename(examContent.metadata.course, examContent.metadata.examType, fileExtension);
+    const asciiFallbackFilename = filename.replace(/[^\x20-\x7E]/g, '_');
 
     // If user is Premium, save to generation history
     try {
@@ -950,7 +964,7 @@ export async function POST(req: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Disposition': `attachment; filename="${asciiFallbackFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
         'Content-Length': buffer.length.toString(),
       },
     });

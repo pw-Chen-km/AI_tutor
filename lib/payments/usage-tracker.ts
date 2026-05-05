@@ -46,10 +46,22 @@ export async function getUsageInfo(userId: string): Promise<UsageInfo | null> {
     return null;
   }
   
-  const tokensUsed = Number(subscription.tokensUsed);
-  const tokensLimit = Number(subscription.tokensLimit);
-  const tokensRemaining = Math.max(0, tokensLimit - tokensUsed);
-  const usagePercentage = tokensLimit > 0 ? Math.round((tokensUsed / tokensLimit) * 100) : 100;
+  // Use BigInt for calculations to avoid precision loss, then convert to Number for return
+  const tokensUsedBig = subscription.tokensUsed;
+  const tokensLimitBig = subscription.tokensLimit;
+  const tokensRemainingBig = tokensLimitBig > tokensUsedBig 
+    ? tokensLimitBig - tokensUsedBig 
+    : BigInt(0);
+  
+  // Safe conversion to Number (values should be within safe integer range for normal usage)
+  const tokensUsed = Number(tokensUsedBig);
+  const tokensLimit = Number(tokensLimitBig);
+  const tokensRemaining = Number(tokensRemainingBig);
+  
+  // Calculate percentage using BigInt to avoid precision issues
+  const usagePercentage = tokensLimitBig > 0 
+    ? Number((tokensUsedBig * BigInt(100)) / tokensLimitBig) 
+    : 0;
   
   const planConfig = PLAN_CONFIG[subscription.plan as PlanType];
   const exportsLimit = planConfig?.exportLimit ?? null;

@@ -40,8 +40,8 @@ function cleanMarkdownText(text: string): string {
     .replace(/\*([^*]+)\*/g, '$1')
     // Remove inline code `text` (after code blocks are handled)
     .replace(/`([^`]+)`/g, '$1')
-    // Remove markdown bullets completely (don't convert to • or ■)
-    .replace(/^[-*■•▪]\s+/gm, '')
+    // Keep list structure readable after stripping markdown.
+    .replace(/^[-*■•▪]\s+/gm, '- ')
     // Remove extra whitespace
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -90,6 +90,80 @@ function formatQuestionText(text: string): { description: string; requirements: 
   description = description.replace(/^Description[:\s]*/i, '').trim();
   
   return { description, requirements };
+}
+
+function detectImageType(buffer: Buffer): 'png' | 'jpg' | undefined {
+  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+    return 'png';
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+    return 'jpg';
+  }
+  return undefined;
+}
+
+function renderQuestionHeader(q: Question, text: string): Table {
+  return new Table({
+    rows: [new TableRow({
+      children: [
+        new TableCell({
+          children: [new Paragraph({
+            children: [
+              new TextRun({
+                text: `${q.number}. `,
+                font: FONTS.default,
+                size: FONT_SIZES.normal,
+                bold: true,
+                color: '0F172A',
+              }),
+              new TextRun({
+                text,
+                font: FONTS.default,
+                size: FONT_SIZES.normal,
+                bold: true,
+                color: '0F172A',
+              }),
+            ],
+            spacing: { after: 0, line: SPACING.lineSpacing },
+            keepNext: true,
+            keepLines: true,
+          })],
+          borders: {
+            top: { style: BorderStyle.SINGLE, size: 2, color: 'CBD5E1' },
+            bottom: { style: BorderStyle.SINGLE, size: 2, color: 'CBD5E1' },
+            left: { style: BorderStyle.SINGLE, size: 8, color: '2563EB' },
+            right: { style: BorderStyle.SINGLE, size: 2, color: 'CBD5E1' },
+          },
+          shading: { fill: 'F8FAFC' },
+          margins: { top: 120, bottom: 120, left: 180, right: 120 },
+          width: { size: 84, type: WidthType.PERCENTAGE },
+        }),
+        new TableCell({
+          children: [new Paragraph({
+            alignment: AlignmentType.RIGHT,
+            children: [new TextRun({
+              text: `${q.marks} pts`,
+              font: FONTS.default,
+              size: FONT_SIZES.small,
+              bold: true,
+              color: '2563EB',
+            })],
+            spacing: { after: 0 },
+          })],
+          borders: {
+            top: { style: BorderStyle.SINGLE, size: 2, color: 'CBD5E1' },
+            bottom: { style: BorderStyle.SINGLE, size: 2, color: 'CBD5E1' },
+            left: { style: BorderStyle.NIL },
+            right: { style: BorderStyle.SINGLE, size: 2, color: 'CBD5E1' },
+          },
+          shading: { fill: 'F8FAFC' },
+          margins: { top: 120, bottom: 120, left: 80, right: 160 },
+          width: { size: 16, type: WidthType.PERCENTAGE },
+        }),
+      ],
+    })],
+    width: { size: 100, type: WidthType.PERCENTAGE },
+  });
 }
 
 // ============================================
@@ -181,6 +255,7 @@ function renderHeader(
       cleanBase64 = cleanBase64.replace(/\s+/g, '');
       
       const imageBuffer = Buffer.from(cleanBase64, 'base64');
+      const imageType = detectImageType(imageBuffer);
       console.log('[renderHeader] Logo buffer created:', imageBuffer.length, 'bytes');
       
       if (imageBuffer.length > 100) {
@@ -194,7 +269,7 @@ function renderHeader(
               width: 604,  // Full content width (對齊兩邊)
               height: 70,  // Maintain reasonable height
             },
-            type: 'png', // Try to detect or default to png
+            type: imageType || 'png',
           });
           
           result.push(new Paragraph({
@@ -362,6 +437,7 @@ function renderDefaultHeader(
       });
       
       const imageBuffer = Buffer.from(cleanBase64, 'base64');
+      const imageType = detectImageType(imageBuffer);
       console.log('[Logo] Step 2 - Buffer created:', imageBuffer.length, 'bytes');
       
       if (imageBuffer.length < 100) {
@@ -378,7 +454,7 @@ function renderDefaultHeader(
             width: 604,  // Full content width (對齊兩邊)
             height: 70,
           },
-          type: 'png', // Default to png, docx will handle other formats
+          type: imageType || 'png',
         });
         
         result.push(new Paragraph({
@@ -653,12 +729,30 @@ function renderInstructionsBox(_instructions: string[]): (Paragraph | Table)[] {
 function renderSection(section: ExamSection, includeSolutions?: boolean): (Paragraph | Table)[] {
   const result: (Paragraph | Table)[] = [];
   
-  // Page break if needed (but no section title - per user request)
+  // Page break if needed
   if (section.pageBreakBefore) {
     result.push(new Paragraph({ children: [new PageBreak()] }));
   }
   
-  // No section title - questions start directly
+  result.push(new Paragraph({
+    children: [
+      new TextRun({
+        text: section.title,
+        font: FONTS.default,
+        size: FONT_SIZES.sectionTitle,
+        bold: true,
+        color: '1E3A8A',
+      }),
+      new TextRun({
+        text: `  (${section.marks} pts)`,
+        font: FONTS.default,
+        size: FONT_SIZES.small,
+        color: '64748B',
+      }),
+    ],
+    spacing: { before: section.pageBreakBefore ? 0 : 120, after: 180 },
+    keepNext: true,
+  }));
   
   // Render questions (pass includeSolutions flag)
   for (const q of section.questions) {
@@ -684,9 +778,6 @@ function buildMetadataLine(q: Question): Paragraph | null {
     addSep();
     parts.push(new TextRun({ text: `Type: ${q.originalType}`, font: FONTS.default, size: FONT_SIZES.small, color: '555555', italics: true }));
   }
-
-  addSep();
-  parts.push(new TextRun({ text: `Worth: ${q.marks} pts`, font: FONTS.default, size: FONT_SIZES.small, color: '555555', italics: true }));
 
   if (q.sources && q.sources.length > 0) {
     const srcText = q.sources.map(s => s.pages ? `${s.file} (p. ${s.pages})` : s.file).join('; ');
@@ -750,26 +841,7 @@ function renderMCQ(q: MCQQuestion, solution?: string): (Paragraph | Table)[] {
   // Clean the question stem
   const cleanedStem = cleanMarkdownText(q.stem);
   
-  // Question number and stem - entire question in bold
-  result.push(new Paragraph({
-    children: [
-      new TextRun({
-        text: `${q.number}. ${cleanedStem}`,
-        font: FONTS.default,
-        size: FONT_SIZES.normal,
-        bold: true,
-      }),
-      new TextRun({
-        text: ` (${q.marks} marks)`,
-        font: FONTS.default,
-        size: FONT_SIZES.normal,
-        italics: true,
-      }),
-    ],
-    spacing: { after: 150 },
-    keepNext: true, // Keep with choices
-    keepLines: true,
-  }));
+  result.push(renderQuestionHeader(q, cleanedStem));
   
   // Choices with proper formatting
   for (let i = 0; i < q.choices.length; i++) {
@@ -790,7 +862,7 @@ function renderMCQ(q: MCQQuestion, solution?: string): (Paragraph | Table)[] {
           size: FONT_SIZES.normal,
         }),
       ],
-      spacing: { after: 100 },
+      spacing: { before: i === 0 ? 120 : 0, after: 100 },
       keepNext: !isLast || !!solution, // Keep all choices together
       keepLines: true,
     }));
@@ -829,27 +901,7 @@ function renderShortAnswer(q: ShortQuestion, solution?: string): (Paragraph | Ta
   // Parse and clean the question text
   const { description, requirements } = formatQuestionText(q.prompt);
   
-  // Question number and description - entire question in bold
-  // Use keepNext to keep with answer lines
-  result.push(new Paragraph({
-    children: [
-      new TextRun({
-        text: `${q.number}. ${description}`,
-        font: FONTS.default,
-        size: FONT_SIZES.normal,
-        bold: true,
-      }),
-      new TextRun({
-        text: ` (${q.marks} marks)`,
-        font: FONTS.default,
-        size: FONT_SIZES.normal,
-        italics: true,
-      }),
-    ],
-    spacing: { after: 120 },
-    keepNext: true, // Keep with next paragraph (answer lines)
-    keepLines: true, // Don't break this paragraph across pages
-  }));
+  result.push(renderQuestionHeader(q, description));
   
   // Requirements list if present - no indent for "Requirements:", items also no indent
   if (requirements.length > 0) {
@@ -947,7 +999,7 @@ function renderShortAnswer(q: ShortQuestion, solution?: string): (Paragraph | Ta
     }
   } else {
     // Answer lines - 10 lines for answer
-    const lineCount = 10; // Fixed 10 lines as per user request
+    const lineCount = q.answerLines || 8;
     const answerLineTable = new Table({
       rows: Array.from({ length: lineCount }, () => new TableRow({
         children: [new TableCell({
@@ -982,26 +1034,7 @@ function renderProgramming(q: ProgrammingQuestion, solution?: string): (Paragrap
   // Parse and clean the question text
   const { description, requirements } = formatQuestionText(q.prompt);
   
-  // Question number and description - entire question in bold
-  result.push(new Paragraph({
-    children: [
-      new TextRun({
-        text: `${q.number}. ${description}`,
-        font: FONTS.default,
-        size: FONT_SIZES.normal,
-        bold: true,
-      }),
-      new TextRun({
-        text: ` (${q.marks} marks)`,
-        font: FONTS.default,
-        size: FONT_SIZES.normal,
-        italics: true,
-      }),
-    ],
-    spacing: { after: 120 },
-    keepNext: true, // Keep with code area
-    keepLines: true,
-  }));
+  result.push(renderQuestionHeader(q, description));
   
   // Requirements from parsed text or from constraints - no indent for label, items indented
   const allConstraints = [...requirements, ...(q.constraints || [])];
@@ -1103,6 +1136,7 @@ function renderProgramming(q: ProgrammingQuestion, solution?: string): (Paragrap
             children: [new TextRun({ text: '', font: FONTS.code, size: FONT_SIZES.code })],
           })],
           borders: BORDERS.box as ITableCellBorders,
+          shading: { fill: 'F8FAFC' },
           width: { size: 100, type: WidthType.PERCENTAGE },
         })],
         height: { value: boxHeight, rule: HeightRule.EXACT },
@@ -1218,16 +1252,15 @@ function highlightCodeLine(line: string): TextRun[] {
   return runs.length > 0 ? runs : [new TextRun({ text: '', font: FONTS.code, size: 18 })];
 }
 
-function renderTrueFalse(q: TrueFalseQuestion, solution?: string): Paragraph[] {
-  const result: Paragraph[] = [
+function renderTrueFalse(q: TrueFalseQuestion, solution?: string): (Paragraph | Table)[] {
+  const result: (Paragraph | Table)[] = [
+    renderQuestionHeader(q, cleanMarkdownText(q.statement)),
     new Paragraph({
       children: [
-        new TextRun({ text: `${q.number}. `, font: FONTS.default, size: FONT_SIZES.normal, bold: true }),
-        new TextRun({ text: `[  True  ]  [  False  ]  `, font: FONTS.default, size: FONT_SIZES.normal, bold: true }),
-        new TextRun({ text: cleanMarkdownText(q.statement), font: FONTS.default, size: FONT_SIZES.normal, bold: true }),
-        new TextRun({ text: ` (${q.marks} marks)`, font: FONTS.default, size: FONT_SIZES.normal, italics: true }),
+        new TextRun({ text: '[  True  ]    [  False  ]', font: FONTS.default, size: FONT_SIZES.normal, bold: true }),
       ],
-      spacing: { after: solution ? 100 : SPACING.afterQuestion },
+      indent: { left: 360 },
+      spacing: { before: 120, after: solution ? 100 : SPACING.afterQuestion },
     }),
   ];
   
@@ -1247,26 +1280,7 @@ function renderTrueFalse(q: TrueFalseQuestion, solution?: string): Paragraph[] {
 function renderDebugging(q: DebuggingQuestion, solution?: string): (Paragraph | Table)[] {
   const result: (Paragraph | Table)[] = [];
   
-  // Prompt with marks - bold
-  result.push(new Paragraph({
-    children: [
-      new TextRun({
-        text: `${q.number}. ${cleanMarkdownText(q.prompt)}`,
-        font: FONTS.default,
-        size: FONT_SIZES.normal,
-        bold: true,
-      }),
-      new TextRun({
-        text: ` (${q.marks} marks)`,
-        font: FONTS.default,
-        size: FONT_SIZES.normal,
-        italics: true,
-      }),
-    ],
-    spacing: { after: 120 },
-    keepNext: true,
-    keepLines: true,
-  }));
+  result.push(renderQuestionHeader(q, cleanMarkdownText(q.prompt)));
   
   // Buggy code box
   if (q.buggyCode) {
@@ -1364,6 +1378,7 @@ function renderDebugging(q: DebuggingQuestion, solution?: string): (Paragraph | 
             children: [new TextRun({ text: '', font: FONTS.code, size: FONT_SIZES.code })],
           })],
           borders: BORDERS.box as ITableCellBorders,
+          shading: { fill: 'F8FAFC' },
         })],
         height: { value: boxHeight, rule: HeightRule.EXACT },
       })],
@@ -1382,20 +1397,21 @@ function renderDebugging(q: DebuggingQuestion, solution?: string): (Paragraph | 
 
 /**
  * Convert legacy export items to formal exam format
- * Total marks will be normalized to 100
+ * By default, keep the user's original points so the exported paper matches
+ * what teachers saw while authoring.
  */
 export function convertToExamContent(
   items: LegacyExportItem[],
   options: ConvertToExamOptions
 ): ExamContent {
-  const TARGET_TOTAL = 100; // Always normalize to 100 points
+  const normalizeTarget = options.normalizeToTotal === undefined ? false : options.normalizeToTotal;
   const rawTotal = items.reduce((sum, it) => sum + (it.points || 0), 0);
-  const scaleFactor = rawTotal > 0 ? TARGET_TOTAL / rawTotal : 1;
+  const scaleFactor = typeof normalizeTarget === 'number' && rawTotal > 0 ? normalizeTarget / rawTotal : 1;
   
   // Function to scale and round marks
   const scaleMarks = (points: number | undefined, defaultVal: number): number => {
     const raw = points || defaultVal;
-    return Math.round(raw * scaleFactor);
+    return Math.max(1, Math.round(raw * scaleFactor));
   };
   
   // Group questions by type for sections
@@ -1501,9 +1517,9 @@ export function convertToExamContent(
     });
   }
   
-  // Adjust last question to ensure total is exactly 100
-  if (allQuestions.length > 0 && runningTotal !== TARGET_TOTAL) {
-    const diff = TARGET_TOTAL - runningTotal;
+  // If explicitly requested, adjust the last question to hit the target total.
+  if (typeof normalizeTarget === 'number' && allQuestions.length > 0 && runningTotal !== normalizeTarget) {
+    const diff = normalizeTarget - runningTotal;
     const lastQ = allQuestions[allQuestions.length - 1];
     lastQ.marks += diff;
     // Update section marks
@@ -1518,7 +1534,7 @@ export function convertToExamContent(
       institution: options.institution,
       examType: options.examType,
       durationMinutes: options.durationMinutes,
-      totalMarks: TARGET_TOTAL, // Always 100
+      totalMarks: sections.reduce((sum, section) => sum + section.marks, 0),
     },
     instructions: options.instructions || [
       'Answer ALL questions.',

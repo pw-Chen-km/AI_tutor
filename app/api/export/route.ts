@@ -1299,7 +1299,23 @@ export async function POST(req: NextRequest) {
         const body = await req.json();
         const exportKind = (body?.exportKind || 'qa') as 'qa' | 'lecture';
         const format = body?.format as ExportFormat;
-        const filename = (body?.filename || 'export').toString();
+        
+        // Sanitize filename to prevent path traversal attacks
+        function sanitizeFilename(name: string): string {
+            return name
+                .replace(/[\\/:*?"<>\x00-\x1f]/g, '_')   // Remove dangerous characters
+                .replace(/\.\.+/g, '_')                    // Prevent path traversal (..)
+                .replace(/^\.+/, '_')                     // Prevent hidden files
+                .slice(0, 255);                           // Limit length
+        }
+        
+        const rawFilename = (body?.filename || 'export').toString();
+        const filename = sanitizeFilename(rawFilename);
+        
+        if (!filename || filename === '_') {
+            return NextResponse.json({ error: 'Invalid filename' }, { status: 400 });
+        }
+        
         const language = (body?.language || 'primary') as ExportLanguage;
         const title = (body?.title || 'Export').toString();
         const includeSolutions = exportKind === 'lecture' ? false : Boolean(body?.includeSolutions);

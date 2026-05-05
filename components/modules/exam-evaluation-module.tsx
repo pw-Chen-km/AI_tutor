@@ -59,6 +59,8 @@ export function ExamEvaluationModule() {
         const cached = (generatedContent as any)?.exam_evaluation;
         return Array.isArray(cached) ? (cached as EvaluationResult[]) : [];
     });
+    // Track modified scores for validation: studentId -> questionNumber -> {awardedPoints, isModified}
+    const [modifiedScores, setModifiedScores] = useState<Record<string, Record<number, { awardedPoints: number; isModified: boolean }>>>({});
     const [expandedStudents, setExpandedStudents] = useState<Record<string, boolean>>({});
     const [expandedQuestions, setExpandedQuestions] = useState<Record<string, boolean>>({});
     const [progress, setProgress] = useState({ current: 0, total: 0, percentage: 0, studentName: '' });
@@ -178,13 +180,82 @@ export function ExamEvaluationModule() {
             setProgress({ current: 0, total: 0, percentage: 0, studentName: '' });
         }
     };
+    
+    // Update score for a question with validation
+    const handleScoreUpdate = (
+        studentId: string,
+        questionNumber: number,
+        newScore: number,
+        maxPoints: number
+    ) => {
+        const clampedScore = Math.max(0, Math.min(newScore, maxPoints));
+        setModifiedScores(prev => ({
+            ...prev,
+            [studentId]: {
+                ...prev[studentId],
+                [questionNumber]: {
+                    awardedPoints: clampedScore,
+                    isModified: true,
+                },
+            },
+        }));
+    };
+    
+    // Recalculate totals when scores are modified
+    const getEffectiveScore = (result: EvaluationResult, ev: QuestionEvaluation) => {
+        const studentMod = modifiedScores[result.studentId];
+        const questionMod = studentMod?.[ev.questionNumber];
+        if (questionMod?.isModified) {
+            return questionMod.awardedPoints;
+        }
+        return ev.awardedPoints;
+    };
+    
+    // Calculate effective totals for a student
+    const getEffectiveTotals = (result: EvaluationResult) => {
+        let totalScore = 0;
+        for (const ev of result.evaluations) {
+            totalScore += getEffectiveScore(result, ev);
+        }
+        const maxScore = result.maxScore;
+        const percentage = maxScore > 0 ? (totalScore / maxScore) * 100 : 0;
+        return { totalScore, maxScore, percentage };
+    };
+    
+    // Validation warnings
+    const getScoreWarnings = (ev: QuestionEvaluation, modifiedScore?: number): string[] => {
+        const warnings: string[] = [];
+        const score = modifiedScore ?? ev.awardedPoints;
+        
+        // Warning: score differs from what LLM determined for clear right/wrong
+        const studentAnswer = ev.studentAnswer?.trim().toLowerCase() || '';
+        const correctAnswer = ev.correctAnswer?.trim().toLowerCase() || '';
+        
+        // Check for exact match (case insensitive)
+        const isExactMatch = studentAnswer === correctAnswer && studentAnswer.length > 0;
+        const isSimilar = studentAnswer && correctAnswer && 
+            (studentAnswer.includes(correctAnswer) || correctAnswer.includes(studentAnswer));
+        
+        if (score === 0 && (isExactMatch || (isSimilar && studentAnswer.length > 5))) {
+            warnings.push('答案看起來正確但給了 0 分');
+        }
+        if (score === ev.maxPoints && studentAnswer !== correctAnswer && !isSimilar && studentAnswer.length > 0) {
+            warnings.push('答案似乎不正確但給了滿分');
+        }
+        
+        return warnings;
+    };
 
     const buildStudentMarkdown = (result: EvaluationResult): string => {
         const lines: string[] = [];
         const name = result.studentName || result.studentId || 'Student';
+        const { totalScore, maxScore, percentage } = getEffectiveTotals(result);
+        const hasModifications = Object.keys(modifiedScores[result.studentId] || {}).length > 0;
+        
         lines.push(`# ${name}`);
         lines.push('');
-        lines.push(`**Score:** ${result.totalScore} / ${result.maxScore}  (${(result.percentage ?? 0).toFixed(1)}%)`);
+        lines.push(`**Score:** ${totalScore} / ${maxScore}  (${percentage.toFixed(1)}%)`);
+        if (hasModifications) lines.push('*分數已人工調整*');
         if (result.studentId) lines.push(`**Student ID:** ${result.studentId}`);
         lines.push('');
         if (result.overallFeedback) {
@@ -197,8 +268,11 @@ export function ExamEvaluationModule() {
             lines.push('## Per-Question Evaluation');
             lines.push('');
             for (const ev of result.evaluations) {
-                const status = ev.isCorrect ? 'Correct' : ev.awardedPoints > 0 ? 'Partial' : 'Incorrect';
-                lines.push(`### Question ${ev.questionNumber}  —  ${ev.awardedPoints} / ${ev.maxPoints} pts  (${status})`);
+                const effectiveScore = getEffectiveScore(result, ev);
+                const isModified = modifiedScores[result.studentId]?.[ev.questionNumber]?.isModified ?? false;
+                const status = effectiveScore === ev.maxPoints ? 'Correct' : effectiveScore > 0 ? 'Partial' : 'Incorrect';
+                const modMarker = isModified ? ' *(已修改)*' : '';
+                lines.push(`### Question ${ev.questionNumber}  —  ${effectiveScore} / ${ev.maxPoints} pts  (${status})${modMarker}`);
                 lines.push('');
                 if (ev.questionText) {
                     lines.push('**Question:**');
@@ -343,14 +417,14 @@ export function ExamEvaluationModule() {
     const classStats = useMemo(() => {
         if (evaluationResults.length === 0) return null;
         const total = evaluationResults.length;
-        const avg =
-            evaluationResults.reduce((s, r) => s + (r.percentage || 0), 0) / total;
-        const passed = evaluationResults.filter((r) => (r.percentage || 0) >= 60)
-            .length;
-        const max = Math.max(...evaluationResults.map((r) => r.percentage || 0));
-        const min = Math.min(...evaluationResults.map((r) => r.percentage || 0));
+        // Use effective totals (modified scores) for class stats
+        const effectivePercentages = evaluationResults.map(r => getEffectiveTotals(r).percentage);
+        const avg = effectivePercentages.reduce((s, p) => s + p, 0) / total;
+        const passed = effectivePercentages.filter(p => p >= 60).length;
+        const max = Math.max(...effectivePercentages);
+        const min = Math.min(...effectivePercentages);
         return { total, avg, passed, max, min };
-    }, [evaluationResults]);
+    }, [evaluationResults, modifiedScores]);
 
     const toggleStudent = (studentId: string) => {
         setExpandedStudents(prev => ({
@@ -699,12 +773,23 @@ export function ExamEvaluationModule() {
                                 </div>
                                 <div className="flex items-center gap-4">
                                     <div className="text-right">
-                                        <p className={`text-2xl font-bold ${getScoreColor(result.percentage)}`}>
-                                            {result.totalScore} / {result.maxScore}
-                                        </p>
-                                        <p className="text-sm text-muted-foreground">
-                                            {result.percentage.toFixed(1)}%
-                                        </p>
+                                        {(() => {
+                                            const { totalScore, maxScore, percentage } = getEffectiveTotals(result);
+                                            const hasModifications = Object.keys(modifiedScores[result.studentId] || {}).length > 0;
+                                            return (
+                                                <>
+                                                    <p className={`text-2xl font-bold ${getScoreColor(percentage)}`}>
+                                                        {totalScore} / {maxScore}
+                                                        {hasModifications && (
+                                                            <span className="text-sm font-normal text-blue-600 ml-2">(已調整)</span>
+                                                        )}
+                                                    </p>
+                                                    <p className="text-sm text-muted-foreground">
+                                                        {percentage.toFixed(1)}%
+                                                    </p>
+                                                </>
+                                            );
+                                        })()}
                                     </div>
                                     {expandedStudents[result.studentId || String(resultIndex)] ? (
                                         <ChevronUp className="w-5 h-5 text-muted-foreground" />
@@ -732,14 +817,17 @@ export function ExamEvaluationModule() {
                                         {result.evaluations?.map((evaluation, evalIndex) => {
                                             const questionKey = `${result.studentId}-${evalIndex}`;
                                             const isExpanded = expandedQuestions[questionKey];
+                                            const effectiveScore = getEffectiveScore(result, evaluation);
+                                            const isModified = modifiedScores[result.studentId]?.[evaluation.questionNumber]?.isModified ?? false;
+                                            const warnings = getScoreWarnings(evaluation, effectiveScore);
                                             
                                             return (
                                                 <div 
                                                     key={evalIndex}
                                                     className={`border rounded-lg overflow-hidden ${
-                                                        evaluation.isCorrect 
+                                                        effectiveScore === evaluation.maxPoints
                                                             ? 'border-emerald-200 dark:border-emerald-800' 
-                                                            : evaluation.awardedPoints > 0 
+                                                            : effectiveScore > 0 
                                                                 ? 'border-yellow-200 dark:border-yellow-800'
                                                                 : 'border-red-200 dark:border-red-800'
                                                     }`}
@@ -750,9 +838,9 @@ export function ExamEvaluationModule() {
                                                         onClick={() => toggleQuestion(questionKey)}
                                                     >
                                                         <div className="flex items-center gap-2">
-                                                            {evaluation.isCorrect ? (
+                                                            {effectiveScore === evaluation.maxPoints ? (
                                                                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                                                            ) : evaluation.awardedPoints > 0 ? (
+                                                            ) : effectiveScore > 0 ? (
                                                                 <AlertCircle className="w-4 h-4 text-yellow-600" />
                                                             ) : (
                                                                 <XCircle className="w-4 h-4 text-red-600" />
@@ -760,16 +848,26 @@ export function ExamEvaluationModule() {
                                                             <span className="font-medium text-sm">
                                                                 Question {evaluation.questionNumber}
                                                             </span>
+                                                            {warnings.length > 0 && (
+                                                                <span className="px-2 py-0.5 text-xs bg-orange-100 text-orange-700 rounded-full" title={warnings.join(', ')}>
+                                                                    需要檢查
+                                                                </span>
+                                                            )}
+                                                            {isModified && (
+                                                                <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">
+                                                                    已修改
+                                                                </span>
+                                                            )}
                                                         </div>
                                                         <div className="flex items-center gap-2">
                                                             <span className={`font-semibold text-sm ${
-                                                                evaluation.isCorrect 
+                                                                effectiveScore === evaluation.maxPoints
                                                                     ? 'text-emerald-600' 
-                                                                    : evaluation.awardedPoints > 0 
+                                                                    : effectiveScore > 0 
                                                                         ? 'text-yellow-600'
                                                                         : 'text-red-600'
                                                             }`}>
-                                                                {evaluation.awardedPoints} / {evaluation.maxPoints} pts
+                                                                {effectiveScore} / {evaluation.maxPoints} pts
                                                             </span>
                                                             {isExpanded ? (
                                                                 <ChevronUp className="w-4 h-4 text-muted-foreground" />
@@ -782,6 +880,51 @@ export function ExamEvaluationModule() {
                                                     {/* Question Details */}
                                                     {isExpanded && (
                                                         <div className="p-3 pt-0 space-y-3 text-sm">
+                                                            {/* Score Editor */}
+                                                            <div className="p-3 bg-gray-50 dark:bg-gray-900/30 rounded border">
+                                                                <div className="flex items-center gap-3 flex-wrap">
+                                                                    <span className="font-medium text-muted-foreground">Score:</span>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <input
+                                                                            type="number"
+                                                                            min={0}
+                                                                            max={evaluation.maxPoints}
+                                                                            value={effectiveScore}
+                                                                            onChange={(e) => handleScoreUpdate(
+                                                                                result.studentId,
+                                                                                evaluation.questionNumber,
+                                                                                parseFloat(e.target.value) || 0,
+                                                                                evaluation.maxPoints
+                                                                            )}
+                                                                            className="w-20 px-2 py-1 text-sm border rounded bg-background"
+                                                                        />
+                                                                        <span className="text-muted-foreground">/ {evaluation.maxPoints} pts</span>
+                                                                    </div>
+                                                                    {isModified && (
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                setModifiedScores(prev => {
+                                                                                    const studentMod = { ...prev[result.studentId] };
+                                                                                    delete studentMod[evaluation.questionNumber];
+                                                                                    return { ...prev, [result.studentId]: studentMod };
+                                                                                });
+                                                                            }}
+                                                                            className="text-xs text-blue-600 hover:text-blue-800 underline"
+                                                                        >
+                                                                            重置為 LLM 評分 ({evaluation.awardedPoints})
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                                {warnings.length > 0 && (
+                                                                    <div className="mt-2 p-2 bg-orange-50 dark:bg-orange-950/20 rounded">
+                                                                        <p className="text-xs font-medium text-orange-700 dark:text-orange-400 mb-1">⚠️ 注意：</p>
+                                                                        <ul className="text-xs text-orange-600 dark:text-orange-300 list-disc list-inside">
+                                                                            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+                                                                        </ul>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            
                                                             <div>
                                                                 <p className="font-medium text-muted-foreground mb-1">Question</p>
                                                                 <p className="whitespace-pre-wrap">{evaluation.questionText}</p>

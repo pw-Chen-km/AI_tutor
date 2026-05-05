@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -442,11 +442,21 @@ export function HomeworkModule() {
         }
     };
 
+    const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     const handleCopy = (text: string, index: number) => {
         navigator.clipboard.writeText(text);
         setCopiedIndex(index);
-        setTimeout(() => setCopiedIndex(null), 2000);
+        
+        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = setTimeout(() => setCopiedIndex(null), 2000);
     };
+
+    useEffect(() => {
+        return () => {
+            if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        };
+    }, []);
 
     const buildPrimaryCopy = (p: Homework['problems'][number]) => {
         const reqs = (p.requirements ?? []).map((r) => `- ${r}`).join('\n') || '-';

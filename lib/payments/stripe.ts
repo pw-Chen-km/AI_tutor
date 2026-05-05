@@ -142,36 +142,76 @@ export async function cancelStripeSubscription(
 /**
  * Cancel all other subscriptions for a customer (keep only the specified one or none)
  * This prevents duplicate subscriptions
+ * 
+ * NOTE: This function uses a simple sequential approach. For high-concurrency scenarios,
+ * consider using database-level locking or idempotency keys.
  */
 export async function cancelAllOtherSubscriptions(
   customerId: string,
   keepSubscriptionId?: string
 ): Promise<number> {
+  // Use a small delay to reduce race condition probability in high-concurrency scenarios
+  await new Promise(resolve => setTimeout(resolve, Math.random() * 100));
+  
   try {
-    // Get all active subscriptions for this customer
-    const subscriptions = await stripe.subscriptions.list({
-      customer: customerId,
-      status: 'active',
-    });
+    // Get all active subscriptions for this customer (with retry logic)
+    let retries = 3;
+    let subscriptions;
+    
+    while (retries > 0) {
+      subscriptions = await stripe.subscriptions.list({
+        customer: customerId,
+        status: 'active',
+        limit: 100,
+      });
+      
+      // If we're keeping a specific subscription, verify it still exists
+      if (keepSubscriptionId) {
+        const targetExists = subscriptions.data.some(sub => sub.id === keepSubscriptionId);
+        if (!targetExists && retries > 1) {
+          // Target subscription not found, wait and retry (might be race condition)
+          await new Promise(resolve => setTimeout(resolve, 500));
+          retries--;
+          continue;
+        }
+      }
+      break;
+    }
     
     let cancelledCount = 0;
     
-    for (const subscription of subscriptions.data) {
+    // Sort subscriptions by creation date (newest first) to keep the most recent one
+    const sortedSubscriptions = subscriptions!.data.sort(
+      (a, b) => (b.created - a.created)
+    );
+    
+    for (const subscription of sortedSubscriptions) {
       // Skip the subscription we want to keep
       if (keepSubscriptionId && subscription.id === keepSubscriptionId) {
         continue;
       }
       
-      // Cancel immediately (not at period end) to clean up duplicates
-      await stripe.subscriptions.cancel(subscription.id);
-      cancelledCount++;
-      console.log(`[Stripe] Cancelled duplicate subscription: ${subscription.id}`);
+      try {
+        // Cancel immediately (not at period end) to clean up duplicates
+        await stripe.subscriptions.cancel(subscription.id);
+        cancelledCount++;
+        console.log(`[Stripe] Cancelled duplicate subscription: ${subscription.id}`);
+      } catch (cancelError: any) {
+        // If already cancelled or in terminal state, log and continue
+        if (cancelError?.code === 'resource_missing' || 
+            cancelError?.message?.includes('subscription is not active')) {
+          console.log(`[Stripe] Subscription ${subscription.id} already cancelled or inactive`);
+          continue;
+        }
+        throw cancelError;
+      }
     }
     
     return cancelledCount;
   } catch (error) {
     console.error('[Stripe] Error cancelling other subscriptions:', error);
-    return 0;
+    // Re-throw to allow caller to handle the error
+    throw error;
   }
 }
 

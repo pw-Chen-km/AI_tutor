@@ -7,7 +7,7 @@
 
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -67,12 +67,22 @@ export function DrillsModuleV2() {
   const drills = Array.isArray(generatedContent.drills) ? generatedContent.drills : [];
   const safeDrills = drills.filter((d) => d && typeof d === 'object');
 
-  // Auto-select all when generated
+  // Auto-select all when generated (only once per generation)
+  const initializedRef = useRef(false);
+  
   useEffect(() => {
-    if (safeDrills.length > 0 && selectedNumbers.length === 0) {
+    if (!initializedRef.current && safeDrills.length > 0 && selectedNumbers.length === 0) {
+      initializedRef.current = true;
       setSelectedNumbers(safeDrills.map((d: any, i: number) => d?.number ?? i + 1));
     }
-  }, [safeDrills]);
+  }, [safeDrills, selectedNumbers]);
+  
+  // Reset initialized flag when drills are cleared
+  useEffect(() => {
+    if (safeDrills.length === 0) {
+      initializedRef.current = false;
+    }
+  }, [safeDrills.length]);
 
   /**
    * Generate drills using agent skills orchestrator

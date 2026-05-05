@@ -173,5 +173,6 @@ export interface ConvertToExamOptions {
   durationMinutes: number;
   instructions?: string[];
   sectionTitle?: string;
+  normalizeToTotal?: number | false;
 }
 

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
@@ -77,6 +77,7 @@ export function LectureRehearsalModule() {
 
     const [loading, setLoading] = useState(false);
     const [copied, setCopied] = useState(false);
+    const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const [audienceLevel, setAudienceLevel] = useState<'beginner' | 'intermediate'>('beginner');
     const [targetMinutes, setTargetMinutes] = useState<number>(45);
     const [format, setFormat] = useState<'docx' | 'pdf' | 'pptx'>('docx');
@@ -94,10 +95,21 @@ export function LectureRehearsalModule() {
     const lectureResults = ((generatedContent as any).lecture_rehearsal || []) as LectureResult[];
     const [selectedLectureIndex, setSelectedLectureIndex] = useState(0);
     const lecture = lectureResults[selectedLectureIndex] as LectureResult | undefined;
+    
+    // Track which lectures have been initialized to avoid overwriting user edits
+    const initializedLecturesRef = useRef<Set<string>>(new Set());
 
-    // Initialize editable state when lecture changes
+    // Initialize editable state when lecture changes (only once per lecture)
     useEffect(() => {
         if (lecture) {
+            // Create a unique key for this lecture
+            const lectureKey = lecture.source_file || lecture.title || `lecture-${selectedLectureIndex}`;
+            
+            // Skip if we've already initialized this lecture (preserve user edits)
+            if (initializedLecturesRef.current.has(lectureKey)) {
+                return;
+            }
+            
             if (Array.isArray(lecture.slides) && lecture.slides.length > 0) {
                 setEditableSlides(lecture.slides.map(s => ({
                     slide_number: s.slide_number,
@@ -113,8 +125,25 @@ export function LectureRehearsalModule() {
                 setSingleIncludeSecondary(true);
                 setSingleIsEditing(false);
             }
+            
+            // Mark this lecture as initialized
+            initializedLecturesRef.current.add(lectureKey);
         }
-    }, [lecture]);
+    }, [lecture, selectedLectureIndex]);
+    
+    // Reset initialized tracking when lecture results change (new generation)
+    // But keep existing lectures if they're the same (edits preserved)
+    useEffect(() => {
+        // Keep only lectures that still exist in the new results
+        const newLectureKeys = new Set(lectureResults.map((l, idx) => l.source_file || l.title || `lecture-${idx}`));
+        const keysToRemove: string[] = [];
+        initializedLecturesRef.current.forEach(key => {
+            if (!newLectureKeys.has(key)) {
+                keysToRemove.push(key);
+            }
+        });
+        keysToRemove.forEach(key => initializedLecturesRef.current.delete(key));
+    }, [lectureResults]);
 
     useEffect(() => {
         if (selectedLectureIndex >= lectureResults.length && lectureResults.length > 0) {
@@ -345,8 +374,15 @@ export function LectureRehearsalModule() {
         if (!text.trim()) return;
         await navigator.clipboard.writeText(text);
         setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = setTimeout(() => setCopied(false), 1500);
     };
+
+    useEffect(() => {
+        return () => {
+            if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        };
+    }, []);
 
     // Update slide content
     const updateSlide = (index: number, field: keyof EditableSlide, value: any) => {
@@ -428,9 +464,10 @@ export function LectureRehearsalModule() {
             pptxFiles[lectureIndex] ||
             pptxFiles.find((f) => f.name === sourceName) ||
             (pptxBase64 ? { name: sourceName || 'pptx', base64: pptxBase64 } : null);
-        const slidesForLecture = Array.isArray(lectureItem?.slides) && lectureItem.slides.length > 0
-            ? lectureItem.slides
-            : editableSlides;
+        // Use editableSlides first (user-edited content), then fall back to original
+        const slidesForLecture = editableSlides.length > 0
+            ? editableSlides
+            : (Array.isArray(lectureItem?.slides) ? lectureItem.slides : []);
         if (!pptxForLecture?.base64 || slidesForLecture.length === 0) {
             throw new Error('PPTX context file or per-slide scripts are missing.');
         }
@@ -475,9 +512,10 @@ export function LectureRehearsalModule() {
         const dateSuffix = formatDateYYYYMMDD(new Date());
         const baseName = (lectureItem?.source_file || lectureItem?.title || 'Lecture-Rehearsal').replace(/[\\/:*?"<>|]+/g, '-').trim();
         const filename = `${baseName}_${dateSuffix}.pptx`;
-        const slidesForLecture = Array.isArray(lectureItem?.slides) && lectureItem.slides.length > 0
-            ? lectureItem.slides
-            : editableSlides;
+        // Use editableSlides first (user-edited content), then fall back to original
+        const slidesForLecture = editableSlides.length > 0
+            ? editableSlides
+            : (Array.isArray(lectureItem?.slides) ? lectureItem.slides : []);
         if (slidesForLecture.length === 0) {
             throw new Error('PDF slides are missing.');
         }

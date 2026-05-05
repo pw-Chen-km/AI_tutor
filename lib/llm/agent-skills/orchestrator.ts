@@ -1170,10 +1170,12 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Calculate points distribution for homework/exams (total = 100)
+   * Calculate points distribution for homework/exams
+   * Respects taskParams.totalScore if provided (for exams), otherwise defaults to 100
    */
   private calculatePointsDistribution(moduleType: string, numberOfItems: number, taskParams: Record<string, any>): number[] {
-    const totalPoints = 100;
+    // Use taskParams.totalScore if provided (for exams/homework), otherwise default to 100
+    const totalPoints = Number(taskParams?.totalScore) > 0 ? Number(taskParams.totalScore) : 100;
     
     // For drills and labs, use fixed points
     if (moduleType === 'drills') {

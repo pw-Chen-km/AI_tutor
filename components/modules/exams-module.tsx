@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -228,34 +228,39 @@ export function ExamsModule() {
 
     const typeCounts = useMemo(() => weightsToCounts(numberOfQuestions, typeWeights), [numberOfQuestions, typeWeights]);
 
+    // Build export items using selected variants (not just original questions)
     const exportItems: ExportItem[] = useMemo(() => {
         const qs = exam?.questions ?? [];
         return qs.map((q: any, idx: number) => {
             const num = Number.isFinite(Number(q?.number)) ? Number(q.number) : idx + 1;
-            const options = Array.isArray(q?.options) ? q.options : [];
+            
+            // Get the displayed/selected variant for this item
+            const displayedQ = getDisplayedQuestion(idx) || q;
+            
+            const options = Array.isArray(displayedQ?.options) ? displayedQ.options : [];
             const optBlock =
                 options.length > 0
                     ? `\n\n## Options\n${options.map((o: string, i: number) => `- ${String.fromCharCode(65 + i)}. ${o}`).join('\n')}`
                     : '';
             return {
                 number: num,
-                title: `Question ${num}`,
-                type: String(q?.type || ''),
-                points: Number.isFinite(Number(q?.points)) ? Number(q.points) : 0,
-                sources: Array.isArray(q?.sources) ? q.sources : [],
+                title: displayedQ?.title || `Question ${num}`,
+                type: String(displayedQ?.type || ''),
+                points: Number.isFinite(Number(displayedQ?.points)) ? Number(displayedQ.points) : 0,
+                sources: Array.isArray(displayedQ?.sources) ? displayedQ.sources : [],
                 primary: {
-                    question: ensureMarkdownCodeFences(`${String(q?.question || '')}${optBlock}`),
-                    solution: ensureMarkdownCodeFences(String(q?.answer || '')),
-                    explanation: ensureMarkdownCodeFences(String(q?.explanation || '')),
+                    question: ensureMarkdownCodeFences(`${String(displayedQ?.question || '')}${optBlock}`),
+                    solution: ensureMarkdownCodeFences(String(displayedQ?.answer || '')),
+                    explanation: ensureMarkdownCodeFences(String(displayedQ?.explanation || '')),
                 },
                 secondary: {
-                    question: ensureMarkdownCodeFences(`${String(q?.question_secondary || '')}${optBlock}`),
-                    solution: ensureMarkdownCodeFences(String(q?.answer_secondary || '')),
-                    explanation: ensureMarkdownCodeFences(String(q?.explanation_secondary || '')),
+                    question: ensureMarkdownCodeFences(`${String(displayedQ?.question_secondary || '')}${optBlock}`),
+                    solution: ensureMarkdownCodeFences(String(displayedQ?.answer_secondary || '')),
+                    explanation: ensureMarkdownCodeFences(String(displayedQ?.explanation_secondary || '')),
                 },
             };
         });
-    }, [exam]);
+    }, [exam, displayedVariant, variants]);
 
     const handleGenerate = async () => {
         if (contextFiles.length === 0) {
@@ -470,11 +475,21 @@ export function ExamsModule() {
         }
     };
 
+    const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     const handleCopy = (text: string, index: number) => {
         navigator.clipboard.writeText(text);
         setCopiedIndex(index);
-        setTimeout(() => setCopiedIndex(null), 2000);
+        
+        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = setTimeout(() => setCopiedIndex(null), 2000);
     };
+
+    useEffect(() => {
+        return () => {
+            if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        };
+    }, []);
 
     return (
         <div className="space-y-6">
@@ -737,6 +752,16 @@ export function ExamsModule() {
                             moduleId="exams"
                             items={exportItems}
                             selectedNumbers={selectedNumbers}
+                            variantInfo={Object.fromEntries(
+                                safeQuestions.map((_, idx) => {
+                                    const itemId = getItemId(idx);
+                                    return [itemId, {
+                                        itemId,
+                                        variants: getVariantsForItem(idx),
+                                        selectedVariantIds: getSelectedVariantIds(idx),
+                                    }];
+                                })
+                            )}
                         />
 
                         {exam.questions.map((originalQuestion, index) => {

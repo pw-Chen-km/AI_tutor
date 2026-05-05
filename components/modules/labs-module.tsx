@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -272,7 +272,7 @@ export function LabsModule() {
         try {
             const context = contextFiles.map((f) => `FILE: ${f.name}\n${f.content}`).join('\n\n---\n\n');
 
-            const response = await fetch('/api/generate-with-agents-stream', {
+            const response = await fetch('/api/generate-with-agents', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -298,47 +298,8 @@ export function LabsModule() {
                 throw new Error(text || `HTTP ${response.status}`);
             }
 
-            const reader = response.body?.getReader();
-            const decoder = new TextDecoder();
-            if (!reader) throw new Error('No response stream');
-
-            let buffer = '';
-            let data: { results?: any[]; type?: string; message?: string; current?: number; total?: number } = {};
-            const processStreamLine = (line: string) => {
-                const normalizedLine = line.trim();
-                if (!normalizedLine.startsWith('data: ')) return;
-                try {
-                    const parsed = JSON.parse(normalizedLine.slice(6));
-                    if (parsed.type === 'progress') {
-                        setProgress({
-                            current: parsed.current ?? 0,
-                            total: parsed.total ?? numberOfProblems,
-                            message: parsed.message ?? 'Processing...',
-                        });
-                    } else if (parsed.type === 'complete') {
-                        data = parsed;
-                    } else if (parsed.type === 'error') {
-                        throw new Error(parsed.message || 'Generation failed');
-                    }
-                } catch (e) {
-                    if (e instanceof SyntaxError) return;
-                    throw e;
-                }
-            };
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split(/\r?\n\r?\n/);
-                buffer = lines.pop() || '';
-                for (const line of lines) {
-                    processStreamLine(line);
-                }
-            }
-            if (buffer.trim()) {
-                processStreamLine(buffer.trim());
-            }
+            setProgress({ current: numberOfProblems, total: numberOfProblems, message: 'Finalizing...' });
+            const data: { results?: any[]; success?: boolean; error?: string } = await response.json();
 
             const results = data.results;
             if (!Array.isArray(results)) {
@@ -382,11 +343,21 @@ export function LabsModule() {
         }
     };
 
+    const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     const handleCopy = (text: string, index: number) => {
         navigator.clipboard.writeText(text);
         setCopiedIndex(index);
-        setTimeout(() => setCopiedIndex(null), 2000);
+        
+        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = setTimeout(() => setCopiedIndex(null), 2000);
     };
+
+    useEffect(() => {
+        return () => {
+            if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        };
+    }, []);
 
     const handleRegenerate = async (index: number) => {
         if (contextFiles.length === 0) return;

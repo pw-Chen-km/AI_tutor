@@ -235,7 +235,12 @@ export function ExportPanel(props: {
     };
     
     // Request formal exam format export
-    const requestExamFormat = async (lang: 'primary' | 'secondary', withSolutions: boolean = true) => {
+    const requestExamFormat = async (
+        lang: 'primary' | 'secondary',
+        withSolutions: boolean = true,
+        itemsForExport: ExportItem[] = selectedItems,
+        filenameSuffix: string = '',
+    ) => {
         const languageLabel = lang === 'primary' ? primaryLanguage : secondaryLanguage;
         const suffix = withSolutions ? 'with-answers' : 'exam-paper';
         const filenameBase = buildFilenameBase();
@@ -250,10 +255,10 @@ export function ExportPanel(props: {
             'exam_pptx': 'pptx',
         };
         const ext = extMap[format];
-        const filename = `${filenameBase}-${languageLabel}-${suffix}.${ext}`;
+        const filename = `${filenameBase}${filenameSuffix}-${languageLabel}-${suffix}.${ext}`;
         
         // Convert ExportItems to LegacyExportItem format for the API
-        const legacyItems = selectedItems.map(item => ({
+        const legacyItems = itemsForExport.map(item => ({
             number: item.number,
             title: item.title,
             type: item.type,
@@ -516,6 +521,10 @@ export function ExportPanel(props: {
     
     // Request with custom items (for variant export)
     const requestOneWithItems = async (lang: 'primary' | 'secondary', withSolutions: boolean, items: ExportItem[], suffix: string = '') => {
+        if (isExamFormat) {
+            return requestExamFormat(lang, withSolutions, items, suffix);
+        }
+
         const filenameBase = buildFilenameBase();
         const languageLabel = lang === 'primary' ? primaryLanguage : secondaryLanguage;
         const solutionSuffix = withSolutions ? 'with-solutions' : 'questions-only';
@@ -704,7 +713,7 @@ export function ExportPanel(props: {
                                         <input
                                             ref={logoInputRef}
                                             type="file"
-                                            accept="image/png,image/jpeg,image/gif"
+                                            accept="image/png,image/jpeg"
                                             className="hidden"
                                             onChange={handleLogoUpload}
                                         />
@@ -899,6 +908,11 @@ export function ExportPanel(props: {
                 {exportTemplates.some(t => t.type === 'pptx') && (
                     <p className="text-[10px] text-slate-500 mt-1">
                         * PPTX template: Content will be overlaid on the background of the first slide.
+                    </p>
+                )}
+                {exportTemplates.some(t => t.type === 'docx') && (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+                        * Word export uses the formal exam layout. Uploaded DOCX templates are not applied to exam papers yet.
                     </p>
                 )}
             </div>

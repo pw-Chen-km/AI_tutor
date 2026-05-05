@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -100,28 +100,35 @@ export function DrillsModule() {
         [contextFiles]
     );
 
+    // Build export items using selected variants (not just original drills)
     const exportItems: ExportItem[] = useMemo(() => {
         return safeDrills.map((d: any, i: number) => {
             const num = Number.isFinite(Number(d?.number)) ? Number(d.number) : i + 1;
+            const itemId = `drill-${num}`;
+            
+            // Get the displayed/selected variant for this item
+            const displayVariantId = displayedVariant[itemId] || 'original';
+            const displayedDrill = getDisplayedDrill(d, i);
+            
             return {
                 number: num,
-                title: String(d?.concept_name || ''),
-                type: String(d?.format || ''),
-                points: Number.isFinite(Number(d?.points)) ? Number(d.points) : 5,
-                sources: Array.isArray(d?.sources) ? d.sources : [],
+                title: String(displayedDrill?.concept_name || d?.concept_name || ''),
+                type: String(displayedDrill?.format || d?.format || ''),
+                points: Number.isFinite(Number(displayedDrill?.points)) ? Number(displayedDrill.points) : 5,
+                sources: Array.isArray(displayedDrill?.sources) ? displayedDrill.sources : [],
                 primary: {
-                    question: ensureMarkdownCodeFences(d?.question),
-                    solution: ensureMarkdownCodeFences(d?.solution),
-                    explanation: ensureMarkdownCodeFences((d as any)?.solution_explanation),
+                    question: ensureMarkdownCodeFences(displayedDrill?.question),
+                    solution: ensureMarkdownCodeFences(displayedDrill?.solution),
+                    explanation: ensureMarkdownCodeFences((displayedDrill as any)?.solution_explanation),
                 },
                 secondary: {
-                    question: ensureMarkdownCodeFences(d?.question_secondary),
-                    solution: ensureMarkdownCodeFences(d?.solution_secondary),
-                    explanation: ensureMarkdownCodeFences((d as any)?.solution_explanation_secondary),
+                    question: ensureMarkdownCodeFences(displayedDrill?.question_secondary),
+                    solution: ensureMarkdownCodeFences(displayedDrill?.solution_secondary),
+                    explanation: ensureMarkdownCodeFences((displayedDrill as any)?.solution_explanation_secondary),
                 },
             };
         });
-    }, [safeDrills]);
+    }, [safeDrills, displayedVariant, drillVariants]);
 
     const handleGenerate = async () => {
         if (contextFiles.length === 0) {
@@ -272,11 +279,21 @@ export function DrillsModule() {
         }
     };
 
+    const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     const handleCopy = (text: string, index: number) => {
         navigator.clipboard.writeText(text);
         setCopiedIndex(index);
-        setTimeout(() => setCopiedIndex(null), 2000);
+        
+        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = setTimeout(() => setCopiedIndex(null), 2000);
     };
+
+    useEffect(() => {
+        return () => {
+            if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        };
+    }, []);
 
     const buildPrimaryCopy = (d: Drill) =>
         `### Problem ${d.number ?? ''}: ${d.concept_name}\n**Points:** ${d.points ?? ''}\n**Type:** ${d.format || ''}\n**Reference:** ${d.suggested_page_ref}\n${
@@ -559,7 +576,8 @@ export function DrillsModule() {
         if (Object.keys(newSelections).length > 0) {
             setSelectedVariants((prev) => ({ ...prev, ...newSelections }));
         }
-    }, [safeDrills]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [safeDrills, setSelectedVariants]);
 
     return (
         <div className="space-y-8 animate-fade-in">
