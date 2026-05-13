@@ -356,9 +356,7 @@ function renderHeader(
       
       // Render item
       const cellContent = renderHeaderItem(item, metadata, studentInfo);
-      const cellBorders: ITableCellBorders = item.type === 'divider' 
-        ? BORDERS.bottomOnly as ITableCellBorders
-        : BORDERS.none as ITableCellBorders;
+      const cellBorders: ITableCellBorders = BORDERS.none as ITableCellBorders;
       
       cells.push(new TableCell({
         children: cellContent,
@@ -557,24 +555,7 @@ function renderDefaultHeader(
     spacing: { after: 200 },
   }));
   
-  // Horizontal line using a bordered table
-  result.push(new Table({
-    rows: [new TableRow({
-      children: [new TableCell({
-        children: [new Paragraph({ children: [] })],
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: {
-          top: { style: BorderStyle.SINGLE, size: 12, color: '000000' },
-          bottom: { style: BorderStyle.NIL },
-          left: { style: BorderStyle.NIL },
-          right: { style: BorderStyle.NIL },
-        },
-      })],
-    })],
-    width: { size: 100, type: WidthType.PERCENTAGE },
-  }));
-  
-  result.push(new Paragraph({ children: [new TextRun({ text: ' ', font: FONTS.default, size: FONT_SIZES.normal })], spacing: { after: 150 } }));
+  result.push(new Paragraph({ children: [], spacing: { after: 120 } }));
   
   // Student info in a single line - 8pt font (size: 16 = 8pt in half-points)
   // Note: docx uses half-point units, so size:16 = 8pt, size:20 = 10pt
@@ -660,17 +641,12 @@ function renderHeaderItem(
 // Instructions Box Rendering
 // ============================================
 
-function renderInstructionsBox(_instructions: string[]): (Paragraph | Table)[] {
-  // Fixed instructions as per user requirement
-  const fixedInstructions = [
-    'All questions must be answered.',
-    'All responses must be written clearly and legibly.',
-    'All necessary steps, calculations, and reasoning must be shown in order to be eligible for partial credit.',
-    'The possession or use of any electronic devices is strictly prohibited for the duration of the examination.',
-  ];
+function renderInstructionsBox(instructions: string[]): (Paragraph | Table)[] {
+  const visibleInstructions = instructions.filter(Boolean);
+  if (visibleInstructions.length === 0) return [];
   
   // Build instruction paragraphs with numbering
-  const instructionParagraphs = fixedInstructions.map((inst, idx) => {
+  const instructionParagraphs = visibleInstructions.map((inst, idx) => {
     return new Paragraph({
       indent: { left: 360 },
       children: [new TextRun({
@@ -700,11 +676,12 @@ function renderInstructionsBox(_instructions: string[]): (Paragraph | Table)[] {
       ...instructionParagraphs,
     ],
     borders: {
-      top: { style: BorderStyle.DOUBLE, size: 6, color: '000000' },
-      bottom: { style: BorderStyle.DOUBLE, size: 6, color: '000000' },
-      left: { style: BorderStyle.DOUBLE, size: 6, color: '000000' },
-      right: { style: BorderStyle.DOUBLE, size: 6, color: '000000' },
+      top: { style: BorderStyle.SINGLE, size: 3, color: 'CBD5E1' },
+      bottom: { style: BorderStyle.SINGLE, size: 3, color: 'CBD5E1' },
+      left: { style: BorderStyle.SINGLE, size: 8, color: '2563EB' },
+      right: { style: BorderStyle.SINGLE, size: 3, color: 'CBD5E1' },
     },
+    shading: { fill: 'F8FAFC' },
     margins: {
       top: 150,
       bottom: 150,
@@ -1407,6 +1384,43 @@ export function convertToExamContent(
   const normalizeTarget = options.normalizeToTotal === undefined ? false : options.normalizeToTotal;
   const rawTotal = items.reduce((sum, it) => sum + (it.points || 0), 0);
   const scaleFactor = typeof normalizeTarget === 'number' && rawTotal > 0 ? normalizeTarget / rawTotal : 1;
+  const isExamModule = !options.moduleId || options.moduleId === 'exams';
+  const sectionPrefix = isExamModule ? 'Section' : 'Part';
+  const defaultInstructions = (() => {
+    switch (options.moduleId) {
+      case 'homework':
+        return [
+          'Complete all assigned questions.',
+          'Write clearly and show your reasoning where appropriate.',
+          'Submit your work by the due date specified by your instructor.',
+        ];
+      case 'labs':
+        return [
+          'Complete all lab tasks and include relevant observations or outputs.',
+          'Show your implementation steps clearly.',
+          'Submit any required files or evidence requested by your instructor.',
+        ];
+      case 'drills':
+        return [
+          'Attempt all practice questions.',
+          'Review the solutions after completing your first attempt.',
+          'Use the drills to identify topics that need more practice.',
+        ];
+      case 'exams':
+      default:
+        return [
+          'All questions must be answered.',
+          'All responses must be written clearly and legibly.',
+          'All necessary steps, calculations, and reasoning must be shown in order to be eligible for partial credit.',
+          'The possession or use of any electronic devices is strictly prohibited for the duration of the examination.',
+        ];
+    }
+  })();
+
+  const sectionTitle = (index: number, title: string) => {
+    const letter = String.fromCharCode(65 + index);
+    return `${sectionPrefix} ${letter}: ${title}`;
+  };
   
   // Function to scale and round marks
   const scaleMarks = (points: number | undefined, defaultVal: number): number => {
@@ -1453,9 +1467,10 @@ export function convertToExamContent(
       };
     });
     allQuestions.push(...mcqQuestions);
+    const sectionIndex = sections.length;
     sections.push({
-      id: 'A',
-      title: 'Section A: Multiple Choice Questions',
+      id: String.fromCharCode(65 + sectionIndex),
+      title: sectionTitle(sectionIndex, 'Multiple Choice Questions'),
       marks: mcqQuestions.reduce((sum, q) => sum + q.marks, 0),
       pageBreakBefore: false,
       questions: mcqQuestions,
@@ -1480,11 +1495,12 @@ export function convertToExamContent(
       };
     });
     allQuestions.push(...shortQuestions);
+    const sectionIndex = sections.length;
     sections.push({
-      id: 'B',
-      title: 'Section B: Short Answer Questions',
+      id: String.fromCharCode(65 + sectionIndex),
+      title: sectionTitle(sectionIndex, 'Short Answer Questions'),
       marks: shortQuestions.reduce((sum, q) => sum + q.marks, 0),
-      pageBreakBefore: sections.length > 0,
+      pageBreakBefore: isExamModule && sections.length > 0,
       questions: shortQuestions,
     });
   }
@@ -1508,11 +1524,12 @@ export function convertToExamContent(
       };
     });
     allQuestions.push(...progQuestions);
+    const sectionIndex = sections.length;
     sections.push({
-      id: 'C',
-      title: 'Section C: Programming Questions',
+      id: String.fromCharCode(65 + sectionIndex),
+      title: sectionTitle(sectionIndex, 'Programming Questions'),
       marks: progQuestions.reduce((sum, q) => sum + q.marks, 0),
-      pageBreakBefore: sections.length > 0,
+      pageBreakBefore: isExamModule && sections.length > 0,
       questions: progQuestions,
     });
   }
@@ -1536,12 +1553,7 @@ export function convertToExamContent(
       durationMinutes: options.durationMinutes,
       totalMarks: sections.reduce((sum, section) => sum + section.marks, 0),
     },
-    instructions: options.instructions || [
-      'Answer ALL questions.',
-      'Write clearly and legibly.',
-      'Show all your work for partial credit.',
-      'No electronic devices are permitted.',
-    ],
+    instructions: options.instructions || defaultInstructions,
     sections,
   };
 }

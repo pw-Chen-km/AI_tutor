@@ -409,8 +409,9 @@ export function LabsModule() {
         try {
             const context = contextFiles.map((f) => `FILE: ${f.name}\n${f.content}`).join('\n\n---\n\n');
 
-            // Use agent skills API for regeneration
-            const response = await fetch('/api/generate-with-agents-stream', {
+            // Single-item regeneration uses the non-streaming endpoint because the
+            // streaming route only supports main batch generation.
+            const response = await fetch('/api/generate-with-agents', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -468,9 +469,9 @@ export function LabsModule() {
                     ((secondaryLanguage.includes('中文') || secondaryLanguage.includes('繁體') || secondaryLanguage.includes('简体')) &&
                         !/[\u4e00-\u9fff]/.test(secDesc));
                 if (bad) {
-                    // Use agent skills API for translation fix
+                    // Use non-streaming API for translation fix regeneration.
                     try {
-                        const fixResponse = await fetch('/api/generate-with-agents-stream', {
+                        const fixResponse = await fetch('/api/generate-with-agents', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -765,7 +766,7 @@ export function LabsModule() {
                                                     const fileContent = contextFiles.find(f => f.name === selectedFile)?.content || '';
                                                     const context = `FILE: ${selectedFile}\n${fileContent}`;
                                                     
-                                                    const response = await fetch('/api/generate-with-agents-stream', {
+                                                    const response = await fetch('/api/generate-with-agents', {
                                                         method: 'POST',
                                                         headers: { 'Content-Type': 'application/json' },
                                                         body: JSON.stringify({

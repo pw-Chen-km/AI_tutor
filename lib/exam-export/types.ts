@@ -174,5 +174,6 @@ export interface ConvertToExamOptions {
   instructions?: string[];
   sectionTitle?: string;
   normalizeToTotal?: number | false;
+  moduleId?: 'drills' | 'labs' | 'homework' | 'exams' | string;
 }
 

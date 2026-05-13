@@ -2,7 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/config';
 import { checkExportAvailable, recordExport } from '@/lib/payments/usage-tracker';
-import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import {
+    AlignmentType,
+    BorderStyle,
+    Document,
+    HeadingLevel,
+    Packer,
+    Paragraph,
+    Table,
+    TableCell,
+    TableRow,
+    TextRun,
+    WidthType,
+} from 'docx';
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
@@ -29,6 +41,8 @@ type ExportItem = {
     primary: { question: string; solution?: string; explanation?: string };
     secondary?: { question?: string; solution?: string; explanation?: string };
 };
+
+type DocxBlock = Paragraph | Table;
 
 function decodeBase64ToBuffer(b64: string): Buffer {
     return Buffer.from(b64, 'base64');
@@ -113,6 +127,163 @@ function splitMarkdownCodeFences(markdown: string) {
     return blocks;
 }
 
+function cleanMarkdownArtifacts(text: string) {
+    return safeString(text)
+        .replace(/\r\n/g, '\n')
+        .replace(/^\s*-{3,}\s*$/gm, '')
+        .replace(/^\s*_{3,}\s*$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function inlineMarkdownRuns(text: string, options?: { font?: string; size?: number; color?: string }) {
+    const runs: TextRun[] = [];
+    const font = options?.font;
+    const size = options?.size;
+    const color = options?.color;
+    const pattern = /(\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*)/g;
+    let last = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = pattern.exec(text)) !== null) {
+        const before = text.slice(last, match.index);
+        if (before) runs.push(new TextRun({ text: before, font, size, color }));
+
+        if (match[2]) {
+            runs.push(new TextRun({ text: match[2], bold: true, font, size, color }));
+        } else if (match[3]) {
+            runs.push(new TextRun({ text: match[3], font: 'Consolas', size, color: '334155' }));
+        } else if (match[4]) {
+            runs.push(new TextRun({ text: match[4], italics: true, font, size, color }));
+        }
+        last = match.index + match[0].length;
+    }
+
+    const rest = text.slice(last);
+    if (rest) runs.push(new TextRun({ text: rest, font, size, color }));
+    return runs.length > 0 ? runs : [new TextRun({ text: ' ', font, size, color })];
+}
+
+function addMarkdownParagraphs(children: DocxBlock[], markdown: string, opts?: { lecture?: boolean }) {
+    const blocks = splitMarkdownCodeFences(cleanMarkdownArtifacts(markdown || ''));
+    const normalSize = opts?.lecture ? 22 : undefined;
+
+    for (const b of blocks) {
+        if (b.kind === 'code') {
+            children.push(new Paragraph({
+                children: [new TextRun({ text: b.lang ? `Code (${b.lang})` : 'Code', italics: true, color: '64748B' })],
+                spacing: { before: 120, after: 60 },
+            }));
+            for (const line of (b.content || '').replace(/\r\n/g, '\n').split('\n')) {
+                children.push(new Paragraph({
+                    children: [new TextRun({ text: line || ' ', font: 'Consolas', size: 20, color: '0F172A' })],
+                    shading: { fill: 'F8FAFC' },
+                    border: {
+                        left: { style: BorderStyle.SINGLE, size: 4, color: 'CBD5E1' },
+                    },
+                    spacing: { after: 20 },
+                    indent: { left: 240 },
+                }));
+            }
+            continue;
+        }
+
+        const lines = (b.content || '').split('\n');
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) {
+                children.push(new Paragraph({ text: '', spacing: { after: opts?.lecture ? 80 : 40 } }));
+                continue;
+            }
+
+            const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
+            if (headerMatch) {
+                const level = headerMatch[1].length <= 2 ? HeadingLevel.HEADING_3 : HeadingLevel.HEADING_4;
+                children.push(new Paragraph({
+                    children: inlineMarkdownRuns(headerMatch[2], { size: 24, color: '1E3A8A' }),
+                    heading: level,
+                    spacing: { before: 180, after: 80 },
+                }));
+                continue;
+            }
+
+            const bulletMatch = line.match(/^[-*•]\s+(.+)$/);
+            if (bulletMatch) {
+                children.push(new Paragraph({
+                    children: inlineMarkdownRuns(bulletMatch[1], { size: normalSize }),
+                    bullet: { level: 0 },
+                    spacing: { after: 80 },
+                }));
+                continue;
+            }
+
+            children.push(new Paragraph({
+                children: inlineMarkdownRuns(line, { size: normalSize }),
+                spacing: { after: opts?.lecture ? 120 : 80, line: opts?.lecture ? 320 : undefined },
+            }));
+        }
+    }
+}
+
+function renderLectureDocx(children: DocxBlock[], payload: Parameters<typeof generateDocx>[0]) {
+    children.push(new Paragraph({
+        text: payload.title || 'Lecture Rehearsal',
+        heading: HeadingLevel.TITLE,
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 120 },
+    }));
+    children.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [new TextRun({ text: `Language: ${payload.languageLabel}`, italics: true, color: '64748B' })],
+        spacing: { after: 300 },
+    }));
+
+    const content = cleanMarkdownArtifacts(payload.items[0]?.question || '');
+    const slideParts = content
+        .split(/(?=^##\s+Slide\s+\d+)/gmi)
+        .map((part) => part.trim())
+        .filter(Boolean);
+    const parts = slideParts.length > 0 ? slideParts : [content];
+
+    parts.forEach((part, index) => {
+        const lines = part.split('\n');
+        const rawTitle = (lines[0] || '').replace(/^#{1,6}\s*/, '').trim();
+        const body = lines.slice(rawTitle ? 1 : 0).join('\n').trim();
+        const title = rawTitle || `Lecture Section ${index + 1}`;
+
+        children.push(new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: [
+                new TableRow({
+                    children: [
+                        new TableCell({
+                            children: [
+                                new Paragraph({
+                                    children: [new TextRun({ text: title, bold: true, color: '1E3A8A', size: 26 })],
+                                    spacing: { after: 0 },
+                                }),
+                            ],
+                            shading: { fill: 'EFF6FF' },
+                            borders: {
+                                top: { style: BorderStyle.SINGLE, size: 2, color: 'BFDBFE' },
+                                bottom: { style: BorderStyle.SINGLE, size: 2, color: 'BFDBFE' },
+                                left: { style: BorderStyle.SINGLE, size: 8, color: '2563EB' },
+                                right: { style: BorderStyle.SINGLE, size: 2, color: 'BFDBFE' },
+                            },
+                            margins: { top: 140, bottom: 140, left: 180, right: 160 },
+                        }),
+                    ],
+                }),
+            ],
+        }));
+        children.push(new Paragraph({ text: '', spacing: { after: 80 } }));
+        addMarkdownParagraphs(children, body, { lecture: true });
+        if (index < parts.length - 1) {
+            children.push(new Paragraph({ text: '', spacing: { after: 240 } }));
+        }
+    });
+}
+
 async function generateDocx(payload: {
     title: string;
     languageLabel: string;
@@ -146,45 +317,21 @@ async function generateDocx(payload: {
         return out as Buffer;
     }
 
-    const children: Paragraph[] = [];
+    const children: DocxBlock[] = [];
+
+    const exportKind = payload.exportKind || 'qa';
+    if (exportKind === 'lecture') {
+        renderLectureDocx(children, payload);
+        const doc = new Document({ sections: [{ children }] });
+        const buf = await Packer.toBuffer(doc);
+        return Buffer.from(buf);
+    }
+
     children.push(new Paragraph({ text: payload.title, heading: HeadingLevel.TITLE }));
     children.push(new Paragraph({ children: [new TextRun({ text: `Language: ${payload.languageLabel}`, italics: true })] }));
     children.push(new Paragraph({ text: '' }));
 
-    const addMarkdown = (md: string) => {
-        const blocks = splitMarkdownCodeFences(md || '');
-        for (const b of blocks) {
-            if (b.kind === 'text') {
-                const lines = (b.content || '').split('\n');
-                for (const line of lines) {
-                    const headerMatch = line.match(/^#{1,6}\s*(.+)$/);
-                    if (headerMatch) {
-                        children.push(new Paragraph({ children: [new TextRun({ text: headerMatch[1], bold: true })] }));
-                    } else {
-                        children.push(new Paragraph({ text: line }));
-                    }
-                }
-                continue;
-            }
-            children.push(new Paragraph({ children: [new TextRun({ text: b.lang ? `Code (${b.lang})` : 'Code', italics: true, color: '666666' })] }));
-            const codeLines = (b.content || '').replace(/\r\n/g, '\n').split('\n');
-            for (const line of codeLines) {
-                children.push(new Paragraph({ children: [new TextRun({ text: line || ' ', font: 'Consolas' })] }));
-            }
-        }
-    };
-
-    const exportKind = payload.exportKind || 'qa';
     for (const it of payload.items) {
-        if (exportKind === 'lecture') {
-            children.push(new Paragraph({ text: it.title || `Section ${it.number}`, heading: HeadingLevel.HEADING_2 }));
-            children.push(new Paragraph({ text: '' }));
-            addMarkdown(safeString(it.question));
-            children.push(new Paragraph({ text: '' }));
-            children.push(new Paragraph({ text: '------------------------' }));
-            children.push(new Paragraph({ text: '' }));
-            continue;
-        }
         children.push(new Paragraph({ text: `Problem ${it.number}: ${it.title}`, heading: HeadingLevel.HEADING_2 }));
         children.push(new Paragraph({ text: `Points: ${it.points}` }));
         children.push(new Paragraph({ text: `Type: ${it.type}` }));
@@ -193,15 +340,15 @@ async function generateDocx(payload: {
         }
         children.push(new Paragraph({ text: '' }));
         children.push(new Paragraph({ text: 'Question', heading: HeadingLevel.HEADING_3 }));
-        addMarkdown(safeString(it.question));
+        addMarkdownParagraphs(children, safeString(it.question));
         children.push(new Paragraph({ text: '' }));
         if (payload.includeSolutions) {
             children.push(new Paragraph({ text: 'Solution', heading: HeadingLevel.HEADING_3 }));
-            addMarkdown(safeString(it.solution));
+            addMarkdownParagraphs(children, safeString(it.solution));
             children.push(new Paragraph({ text: '' }));
             if (payload.includeExplanations) {
                 children.push(new Paragraph({ text: 'Explanation', heading: HeadingLevel.HEADING_3 }));
-                addMarkdown(safeString(it.explanation));
+                addMarkdownParagraphs(children, safeString(it.explanation));
                 children.push(new Paragraph({ text: '' }));
             }
         }

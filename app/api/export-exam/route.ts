@@ -51,6 +51,7 @@ interface ExportExamRequest {
   examType?: string;
   durationMinutes?: number;
   instructions?: string[];
+  moduleId?: 'drills' | 'labs' | 'homework' | 'exams' | string;
 
   // Include solutions in the output
   includeSolutions?: boolean;
@@ -847,6 +848,7 @@ export async function POST(req: NextRequest) {
         durationMinutes: body.durationMinutes || 120,
         instructions: body.instructions,
         normalizeToTotal: false,
+        moduleId: body.moduleId,
         ...(body.convertOptions || {}),
       };
       

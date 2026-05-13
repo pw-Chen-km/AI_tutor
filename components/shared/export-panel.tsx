@@ -51,9 +51,25 @@ export interface VariantInfo {
     selectedVariantIds: string[];
 }
 
+function getDefaultExamType(moduleId: ExportPanelModuleId) {
+    switch (moduleId) {
+        case 'homework':
+            return 'Homework Assignment';
+        case 'drills':
+            return 'Practice Drills';
+        case 'labs':
+            return 'Lab Assignment';
+        case 'exams':
+        default:
+            return 'Final Examination';
+    }
+}
+
+type ExportPanelModuleId = 'drills' | 'labs' | 'homework' | 'exams';
+
 export function ExportPanel(props: {
     title: string;
-    moduleId: 'drills' | 'labs' | 'homework' | 'exams';
+    moduleId: ExportPanelModuleId;
     items: ExportItem[];
     selectedNumbers: number[];
     // Optional: variant info for combination export
@@ -124,13 +140,14 @@ export function ExportPanel(props: {
     const [showVariantWarning, setShowVariantWarning] = useState(false);
     
     // Exam format configuration
+    const defaultExamType = getDefaultExamType(props.moduleId);
     const [examConfig, setExamConfig] = useState({
         course: '',
         institution: '',
-        examType: 'Final Examination',
+        examType: defaultExamType,
         durationMinutes: 120,
     });
-    const [examTypeDropdown, setExamTypeDropdown] = useState('Final Examination');
+    const [examTypeDropdown, setExamTypeDropdown] = useState(defaultExamType);
     const logoInputRef = useRef<HTMLInputElement>(null);
     // All formats are now exam formats
     const isExamFormat = true;
@@ -306,9 +323,10 @@ export function ExportPanel(props: {
                 mode: 'convert',
                 format: ext, // 'docx', 'pdf', or 'pptx'
                 items: legacyItems,
+                moduleId: props.moduleId,
                 course: examConfig.course || props.title,
                 institution: examConfig.institution || 'University',
-                examType: examConfig.examType || 'Examination',
+                examType: examConfig.examType || defaultExamType,
                 durationMinutes: examConfig.durationMinutes || 120,
                 includeSolutions: withSolutions,
                 // Logo for header (if uploaded)
@@ -746,6 +764,9 @@ export function ExportPanel(props: {
                                         }
                                     }}
                                 >
+                                    {defaultExamType !== 'Final Examination' && (
+                                        <option value={defaultExamType}>{defaultExamType}</option>
+                                    )}
                                     <option value="Final Examination">Final Examination</option>
                                     <option value="Midterm Examination">Midterm Examination</option>
                                     <option value="Quiz">Quiz</option>
