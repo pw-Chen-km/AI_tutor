@@ -32,6 +32,22 @@ export interface ContextFile {
     name: string;
     type: string;
     content: string;
+    intake?: {
+        fileName?: string;
+        fileType?: string;
+        intent?: string;
+        content?: string;
+        strategy?: string;
+        pages?: Array<{
+            pageNumber: number;
+            text: string;
+            textLen: number;
+            features?: Record<string, any>;
+            notes?: string;
+        }>;
+        warnings?: string[];
+        metadata?: Record<string, any>;
+    };
     // Optional raw file payload for formats where we want to preserve structure (e.g. PPTX for slide-by-slide notes).
     // Not persisted (see partialize below).
     rawBase64?: string;

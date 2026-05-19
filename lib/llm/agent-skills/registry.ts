@@ -14,6 +14,8 @@ import { ContentFormatterSkill } from './skills/content-formatter';
 import { ExamFormatterSkill } from './skills/exam-formatter';
 import { DocumentPreprocessorSkill } from './skills/document-preprocessor';
 import { SourcePlannerSkill } from './skills/source-planner';
+import { OutlineRefinerSkill } from './skills/outline-refiner';
+import { GlobalOutlineMergerSkill } from './skills/global-outline-merger';
 
 export class SkillRegistry {
   private static instance: SkillRegistry;
@@ -42,6 +44,8 @@ export class SkillRegistry {
     this.register(new ContentFormatterSkill());
     this.register(new ExamFormatterSkill());
     this.register(new DocumentPreprocessorSkill());
+    this.register(new OutlineRefinerSkill());
+    this.register(new GlobalOutlineMergerSkill());
     this.register(new SourcePlannerSkill());
   }
 

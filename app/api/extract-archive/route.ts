@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
-import mammoth from 'mammoth';
-import * as XLSX from 'xlsx';
-import { extractTextFromPptx } from '@/lib/parsers/pptx';
+import { intakeDocument } from '@/lib/document-intake';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120; // 120 seconds for large archives
@@ -50,84 +48,7 @@ export async function POST(req: NextRequest) {
                         const fileContent = await zipEntry.async('nodebuffer');
                         const buffer = Buffer.from(fileContent);
                         const ext = fileName.split('.').pop()?.toLowerCase();
-                        const textExtensions = ['txt', 'md', 'json', 'csv', 'xml', 'html', 'css', 'js', 'ts', 'py', 'java', 'cpp', 'c', 'h'];
-                        
-                        if (textExtensions.includes(ext || '')) {
-                            // Plain text files
-                            content = buffer.toString('utf-8');
-                        } else if (ext === 'pptx') {
-                            // Parse PPTX files
-                            try {
-                                const pptxText = await extractTextFromPptx(buffer);
-                                content = pptxText && pptxText.trim().length > 0
-                                    ? pptxText
-                                    : `PowerPoint file: ${fileName}\n(No extractable text found in slides)`;
-                            } catch (pptxError: any) {
-                                console.error(`PPTX Parse Error for ${fileName}:`, pptxError);
-                                content = `[ERROR: Failed to parse PPTX file ${fileName}: ${pptxError.message}]`;
-                            }
-                        } else if (ext === 'docx') {
-                            // Parse DOCX files
-                            try {
-                                const docxResult = await mammoth.extractRawText({ buffer });
-                                content = docxResult.value;
-                            } catch (docxError: any) {
-                                console.error(`DOCX Parse Error for ${fileName}:`, docxError);
-                                content = `[ERROR: Failed to parse DOCX file ${fileName}: ${docxError.message}]`;
-                            }
-                        } else if (ext === 'xlsx' || ext === 'xls') {
-                            // Parse Excel files
-                            try {
-                                const workbook = XLSX.read(buffer);
-                                const sheets = workbook.SheetNames.map(name => {
-                                    const sheet = workbook.Sheets[name];
-                                    return `Sheet: ${name}\n${XLSX.utils.sheet_to_txt(sheet)}`;
-                                });
-                                content = sheets.join('\n\n');
-                            } catch (xlsError: any) {
-                                console.error(`Excel Parse Error for ${fileName}:`, xlsError);
-                                content = `[ERROR: Failed to parse Excel file ${fileName}: ${xlsError.message}]`;
-                            }
-                        } else if (ext === 'pdf') {
-                            // PDF files - try to parse
-                            try {
-                                const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-                                const uint8Array = new Uint8Array(buffer);
-                                const loadingTask = pdfjs.getDocument({
-                                    data: uint8Array,
-                                    useWorkerFetch: false,
-                                    isEvalSupported: false,
-                                    verbosity: 0,
-                                    useSystemFonts: true,
-                                } as any);
-                                
-                                const pdf = await loadingTask.promise;
-                                let fullText = '';
-                                
-                                for (let i = 1; i <= pdf.numPages; i++) {
-                                    const page = await pdf.getPage(i);
-                                    const textContent = await page.getTextContent();
-                                    // @ts-ignore
-                                    const pageText = textContent.items
-                                        .map((item: any) => item.str)
-                                        .join(' ');
-                                    // Add page marker before each page's content
-                                    fullText += `[PAGE: ${i}]\n${pageText}\n\n`;
-                                }
-                                
-                                content = fullText.trim();
-                            } catch (pdfError: any) {
-                                console.error(`PDF Parse Error for ${fileName}:`, pdfError);
-                                // Fallback: try pdf-lib for metadata
-                                try {
-                                    const { PDFDocument } = await import('pdf-lib');
-                                    const pdfDoc = await PDFDocument.load(buffer);
-                                    content = `PDF File: ${fileName}\nPages: ${pdfDoc.getPageCount()}\n(Full text extraction failed, but file was recognized)`;
-                                } catch (fallbackError: any) {
-                                    content = `[ERROR: Failed to parse PDF file ${fileName}: ${pdfError.message}]`;
-                                }
-                            }
-                        } else if (ext === 'jpg' || ext === 'jpeg' || ext === 'png' || ext === 'gif' || ext === 'webp' || ext === 'bmp') {
+                        if (ext === 'jpg' || ext === 'jpeg' || ext === 'png' || ext === 'gif' || ext === 'webp' || ext === 'bmp') {
                             // Image files - mark as image (will be processed by LLM vision API)
                             content = `[IMAGE: ${fileName}]`;
                         } else if (ext === 'ppt' || ext === 'pptm') {
@@ -137,16 +58,15 @@ export async function POST(req: NextRequest) {
                             // Older Word formats - mark as needing special handling
                             content = `[WORD FILE: ${fileName} - Please convert to DOCX format for better compatibility]`;
                         } else {
-                            // Try UTF-8 for unknown files
                             try {
-                                content = buffer.toString('utf-8');
-                                // Check if it's valid UTF-8 text
-                                if (!/^[\x20-\x7E\s]*$/.test(content) && content.length > 0) {
-                                    // Contains non-printable characters, likely binary
-                                    // But don't mark as BINARY FILE - mark as needing special handling
-                                    content = `[UNKNOWN BINARY: ${fileName} - File type may not be supported]`;
-                                }
-                            } catch {
+                                const result = await intakeDocument({
+                                    fileName,
+                                    buffer,
+                                    intent: 'evaluate_student_answer',
+                                });
+                                content = result.content;
+                            } catch (intakeError: any) {
+                                console.error(`Intake failed for ${fileName}:`, intakeError);
                                 content = `[UNKNOWN BINARY: ${fileName} - File type may not be supported]`;
                             }
                         }

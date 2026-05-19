@@ -85,6 +85,7 @@ export function LabsModule() {
                     name: f.name,
                     type: String(f.name || '').split('.').pop()?.toLowerCase() || '',
                     rawBase64: f.rawBase64,
+                    intake: f.intake || null,
                 })),
         [contextFiles]
     );

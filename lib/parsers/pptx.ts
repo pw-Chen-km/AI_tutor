@@ -12,6 +12,14 @@ function decodeXmlEntities(input: string) {
         .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+function cleanSlideText(input: string) {
+    return input
+        // Some generated PPTX files store escaped OOXML fragments inside text runs.
+        .replace(/<\/?[a-zA-Z][\w.-]*(?::[\w.-]+)?\b[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 function extractTextFromSlideXml(xml: string) {
     // PowerPoint slide text commonly lives in <a:t> ... </a:t>
     const texts: string[] = [];
@@ -19,7 +27,7 @@ function extractTextFromSlideXml(xml: string) {
     let m: RegExpExecArray | null;
     while ((m = re.exec(xml)) !== null) {
         const raw = m[1] ?? '';
-        const decoded = decodeXmlEntities(raw).trim();
+        const decoded = cleanSlideText(decodeXmlEntities(raw));
         if (decoded) texts.push(decoded);
     }
 

@@ -1,5 +1,7 @@
 // Client-side file reading utilities
 
+import type { DocumentIntakeIntent } from '@/lib/document-intake/types';
+
 // Vercel serverless requests are rejected before our API route runs when the
 // multipart body is too large. Keep the client-side limit below that ceiling.
 const SERVER_PARSE_FILE_LIMIT_BYTES = 4 * 1024 * 1024;
@@ -40,20 +42,59 @@ export async function readFileAsBase64(file: File): Promise<string> {
     });
 }
 
+export type ParsedFileResult = {
+    fileName?: string;
+    fileType?: string;
+    intent?: DocumentIntakeIntent;
+    content: string;
+    pages?: Array<{
+        pageNumber: number;
+        text: string;
+        textLen: number;
+        features?: Record<string, any>;
+        notes?: string;
+    }>;
+    strategy?: string;
+    warnings?: string[];
+    metadata?: Record<string, any>;
+};
+
 export async function parseFile(file: File): Promise<string> {
+    const parsed = await parseFileDetailed(file);
+    return parsed.content;
+}
+
+export async function parseFileDetailed(file: File, intent: DocumentIntakeIntent = 'generic'): Promise<ParsedFileResult> {
     const fileType = file.name.split('.').pop()?.toLowerCase();
 
     switch (fileType) {
         case 'txt':
-        case 'md':
-            return await readTextFile(file);
+        case 'md': {
+            const content = await readTextFile(file);
+            return {
+                fileName: file.name,
+                fileType: fileType || 'txt',
+                intent,
+                content,
+                pages: [
+                    {
+                        pageNumber: 1,
+                        text: content,
+                        textLen: content.length,
+                    },
+                ],
+                strategy: `${fileType}.client-text`,
+                warnings: [],
+                metadata: {},
+            };
+        }
 
         case 'pdf':
         case 'docx':
         case 'pptx':
         case 'xlsx':
             // These require server-side processing
-            return await uploadAndParse(file);
+            return await uploadAndParse(file, intent);
 
         default:
             throw new Error(`Unsupported file type: ${fileType}`);
@@ -74,7 +115,7 @@ export async function parseFileForEvaluation(file: File): Promise<string> {
         case 'pptx':
         case 'xlsx':
             // These require server-side processing
-            return await uploadAndParse(file);
+            return (await uploadAndParse(file)).content;
 
         case 'png':
         case 'jpg':
@@ -101,13 +142,14 @@ export async function parseFileForEvaluation(file: File): Promise<string> {
     }
 }
 
-async function uploadAndParse(file: File): Promise<string> {
+async function uploadAndParse(file: File, intent: DocumentIntakeIntent = 'generic'): Promise<ParsedFileResult> {
     if (file.size > SERVER_PARSE_FILE_LIMIT_BYTES) {
         throw new Error(buildTooLargeMessage(file));
     }
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('intent', intent);
 
     try {
         const controller = new AbortController();
@@ -130,7 +172,16 @@ async function uploadAndParse(file: File): Promise<string> {
         }
 
         const data = await response.json();
-        return data.content;
+        return {
+            fileName: data.fileName || file.name,
+            fileType: data.fileType || file.name.split('.').pop()?.toLowerCase(),
+            intent: data.intent || intent,
+            content: data.content || '',
+            pages: Array.isArray(data.pages) ? data.pages : [],
+            strategy: data.strategy,
+            warnings: Array.isArray(data.warnings) ? data.warnings : [],
+            metadata: data.metadata || {},
+        };
     } catch (error: any) {
         if (error.name === 'AbortError') {
             throw new Error('File upload timed out. Please try a smaller file.');

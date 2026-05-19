@@ -23,9 +23,39 @@ type PlannedSourceItem = {
   questionType: string;
   file: string;
   pages: string;
+  sources?: Array<{ file: string; pages: string }>;
+  scopeKind?: string;
+  chapterIds?: string[];
+  sectionIds?: string[];
   topicLabels: string[];
+  integrationGoal?: string;
   rationale: string;
 };
+
+type PreprocessedSourceDocument = {
+  fileName: string;
+  outline?: any;
+  outlineSource?: string;
+  pages: any[];
+};
+
+function inferChapterNumberFromText(...values: string[]) {
+  const text = values.filter(Boolean).join(' ');
+  const patterns = [
+    /\bch(?:apter)?\.?\s*(\d{1,3})\b/i,
+    /\bweek\s*(\d{1,3})\b/i,
+    /\blecture\s*(\d{1,3})\b/i,
+    /\bunit\s*(\d{1,3})\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const value = Number(match[1]);
+      if (Number.isFinite(value) && value > 0) return value;
+    }
+  }
+  return null;
+}
 
 export class AgentOrchestrator {
   private static instance: AgentOrchestrator;
@@ -265,15 +295,15 @@ export class AgentOrchestrator {
       const sourceGoal =
         moduleType === 'homework'
           ? relativePosition <= 0.34
-            ? 'Use a focused source scope that supports a warm-up assignment problem.'
+            ? 'Use a focused section as warm-up, while preserving the assignment goal of bridging two chapters across the set.'
             : relativePosition >= 0.75
-            ? 'Use a local source scope that supports multi-step integration without becoming broad or diffuse.'
-            : 'Use a local source scope that supports moderate integration across a small set of ideas.'
+            ? 'Use a two-chapter bridge that requires transfer, comparison, or dependency between chapters.'
+            : 'Use a two-chapter bridge with moderate integration across related ideas.'
           : moduleType === 'exams'
-          ? 'Use a local source scope that tests one primary skill cleanly under time pressure.'
+          ? 'Use three-plus-chapter concept fusion while keeping one primary skill target clear under time pressure.'
           : moduleType === 'labs'
-          ? 'Use a coherent mini-topic suitable for hands-on practice.'
-          : 'Use one small local source scope for a quick, focused item.';
+          ? 'Use multiple related sections inside one chapter for hands-on practice.'
+          : 'Use exactly one section for a quick, focused in-class item.';
 
       return {
         item_number: itemNumber,
@@ -299,12 +329,19 @@ export class AgentOrchestrator {
     const topicText = sourcePlanItem.topicLabels.length > 0
       ? sourcePlanItem.topicLabels.join(', ')
       : 'the planned local concept(s)';
+    const sourceRefs = Array.isArray(sourcePlanItem.sources) && sourcePlanItem.sources.length > 0
+      ? sourcePlanItem.sources.map((source) => `${source.file} pages ${source.pages}`).join('; ')
+      : `${sourcePlanItem.file} pages ${sourcePlanItem.pages}`;
 
     return `SOURCE PLAN:
-- Use ${sourcePlanItem.file} pages ${sourcePlanItem.pages} as the main source scope for this item.
+- Use ${sourceRefs} as the main source scope for this item.
+- Scope kind: ${sourcePlanItem.scopeKind || 'local_source'}.
+- Chapter IDs: ${(sourcePlanItem.chapterIds || []).join(', ') || 'not specified'}.
+- Section IDs: ${(sourcePlanItem.sectionIds || []).join(', ') || 'not specified'}.
 - Focus on these concept labels: ${topicText}.
+- Integration goal: ${sourcePlanItem.integrationGoal || 'Keep the item aligned to the planned source evidence.'}
 - Planner rationale: ${sourcePlanItem.rationale}.
-- Keep the question tightly anchored to this local source scope rather than the whole course.`;
+- Keep the question anchored to this planned source scope rather than the whole course.`;
   }
 
   private buildSolutionContract(params: {
@@ -326,6 +363,7 @@ export class AgentOrchestrator {
       : sourcePlanItem
       ? `${sourcePlanItem.file} pages ${sourcePlanItem.pages}`
       : 'Use the provided local source evidence only.';
+    const plan = sourcePlanItem || taskParams?.sourcePlanItem || null;
 
     const lines = [
       'TEACHER CONTRACT:',
@@ -333,6 +371,18 @@ export class AgentOrchestrator {
       `- Question type: ${questionType}`,
       `- Source scope: ${sourceSummary}`,
     ];
+    if (plan?.scopeKind) {
+      lines.push(`- Scope kind: ${plan.scopeKind}`);
+    }
+    if (Array.isArray(plan?.chapterIds) && plan.chapterIds.length > 0) {
+      lines.push(`- Chapter IDs: ${plan.chapterIds.join(', ')}`);
+    }
+    if (Array.isArray(plan?.sectionIds) && plan.sectionIds.length > 0) {
+      lines.push(`- Section IDs: ${plan.sectionIds.join(', ')}`);
+    }
+    if (typeof plan?.integrationGoal === 'string' && plan.integrationGoal.trim()) {
+      lines.push(`- Integration goal: ${plan.integrationGoal.trim()}`);
+    }
 
     if (typeof questionData?.title === 'string' && questionData.title.trim()) {
       lines.push(`- Question title: ${questionData.title.trim()}`);
@@ -404,6 +454,16 @@ export class AgentOrchestrator {
         ...(Array.isArray(page?.must_cover) ? page.must_cover.slice(0, 2) : []),
       ].filter((value: any) => typeof value === 'string' && value.trim()))
     )].slice(0, 6);
+    const chapterIds = [...new Set(
+      selectedPages
+        .map((page: any) => String(page?.chapter_id || '').trim())
+        .filter(Boolean)
+    )];
+    const sectionIds = [...new Set(
+      selectedPages
+        .map((page: any) => String(page?.section_id || '').trim())
+        .filter(Boolean)
+    )];
     const combinedText = selectedPages
       .map((page: any) => typeof page?.text === 'string' ? page.text : '')
       .join('\n')
@@ -422,6 +482,8 @@ export class AgentOrchestrator {
       file: fileName,
       pages: pageRange,
       topicLabels,
+      chapterIds,
+      sectionIds,
       combinedText,
       textLength,
       span: selectedPages.length,
@@ -432,9 +494,11 @@ export class AgentOrchestrator {
     };
   }
 
-  private buildPlannerDocuments(usableDocs: Array<{ fileName: string; pages: any[] }>) {
+  private buildPlannerDocuments(usableDocs: PreprocessedSourceDocument[]) {
     return usableDocs.map((doc) => ({
       file: doc.fileName,
+      outline: doc.outline || undefined,
+      outline_source: doc.outlineSource || undefined,
       pages: doc.pages.map((page: any) => {
         const features = page?.features || {};
         const preview = typeof page?.text === 'string'
@@ -443,6 +507,10 @@ export class AgentOrchestrator {
 
         return {
           page_number: Number(page?.page_number) || 0,
+          chapter_id: typeof page?.chapter_id === 'string' ? page.chapter_id : undefined,
+          section_id: typeof page?.section_id === 'string' ? page.section_id : undefined,
+          section_title: typeof page?.section_title === 'string' ? page.section_title : undefined,
+          slide_type_hint: typeof page?.slide_type_hint === 'string' ? page.slide_type_hint : undefined,
           text_len: Number(page?.text_len) || 0,
           topic_labels: Array.isArray(page?.topic_labels) ? page.topic_labels : [],
           must_cover: Array.isArray(page?.must_cover) ? page.must_cover : [],
@@ -457,6 +525,225 @@ export class AgentOrchestrator {
         };
       }),
     }));
+  }
+
+  private applyOutlineToPages(pages: any[], outline: any) {
+    const sectionByPage = new Map<number, any>();
+    const chapters = Array.isArray(outline?.chapters) ? outline.chapters : [];
+
+    for (const chapter of chapters) {
+      const sections = Array.isArray(chapter?.sections) ? chapter.sections : [];
+      for (const section of sections) {
+        const refs = Array.isArray(section?.page_refs) ? section.page_refs : this.parseScopePages(String(section?.page_range || ''));
+        for (const ref of refs) {
+          const pageNumber = Number(ref) || 0;
+          if (pageNumber > 0) {
+            sectionByPage.set(pageNumber, { chapter, section });
+          }
+        }
+      }
+    }
+
+    return pages.map((page: any) => {
+      const match = sectionByPage.get(Number(page?.page_number) || 0);
+      if (!match) return page;
+      return {
+        ...page,
+        chapter_id: String(match.chapter?.chapter_id || page?.chapter_id || ''),
+        section_id: String(match.section?.section_id || page?.section_id || ''),
+        section_title: String(match.section?.title || page?.section_title || ''),
+      };
+    });
+  }
+
+  private buildFallbackGlobalOutline(documents: PreprocessedSourceDocument[]) {
+    const sorted = [...documents]
+      .map((doc, index) => {
+        const firstChapter = Array.isArray(doc.outline?.chapters) ? doc.outline.chapters[0] : null;
+        const inferredNumber = inferChapterNumberFromText(doc.fileName, firstChapter?.title || '');
+        return { doc, index, inferredNumber };
+      })
+      .sort((a, b) => {
+        if (a.inferredNumber && b.inferredNumber) return a.inferredNumber - b.inferredNumber;
+        if (a.inferredNumber) return -1;
+        if (b.inferredNumber) return 1;
+        return a.index - b.index;
+      });
+
+    const chapters = sorted.map(({ doc }, index) => {
+      const firstChapter = Array.isArray(doc.outline?.chapters) ? doc.outline.chapters[0] : null;
+      const globalChapterId = `course-ch${index + 1}`;
+      const sections = (Array.isArray(firstChapter?.sections) ? firstChapter.sections : []).map((section: any, sectionIndex: number) => ({
+        ...section,
+        section_id: `${globalChapterId}-s${sectionIndex + 1}`,
+        source_file: doc.fileName,
+        local_section_id: section?.section_id,
+      }));
+      return {
+        chapter_id: globalChapterId,
+        title: firstChapter?.title || doc.fileName.replace(/\.[^.]+$/, ''),
+        order: index + 1,
+        source_files: [doc.fileName],
+        source_chapters: [{ file: doc.fileName, local_chapter_id: firstChapter?.chapter_id || 'ch1' }],
+        order_confidence: inferChapterNumberFromText(doc.fileName, firstChapter?.title || '') ? 'medium' : 'low',
+        order_basis: inferChapterNumberFromText(doc.fileName, firstChapter?.title || '') ? ['filename/title chapter number'] : ['upload order fallback'],
+        sections,
+      };
+    });
+
+    return {
+      course_outline: { chapters },
+      file_chapter_map: chapters.flatMap((chapter: any) =>
+        chapter.source_chapters.map((source: any) => ({
+          file: source.file,
+          local_chapter_id: source.local_chapter_id,
+          global_chapter_id: chapter.chapter_id,
+        }))
+      ),
+      section_map: chapters.flatMap((chapter: any) =>
+        (chapter.sections || []).map((section: any) => ({
+          file: section.source_file,
+          local_section_id: section.local_section_id,
+          global_chapter_id: chapter.chapter_id,
+          global_section_id: section.section_id,
+        }))
+      ),
+    };
+  }
+
+  private applyGlobalOutline(documents: PreprocessedSourceDocument[], mergeData: any): PreprocessedSourceDocument[] {
+    const courseOutline = mergeData?.course_outline || null;
+    const chapterMap = new Map<string, string>();
+    const sectionMap = new Map<string, { globalChapterId: string; globalSectionId: string; title?: string }>();
+    const courseChapters = Array.isArray(courseOutline?.chapters) ? courseOutline.chapters : [];
+
+    for (const chapter of courseChapters) {
+      const globalChapterId = String(chapter?.chapter_id || '');
+      if (!globalChapterId) continue;
+
+      for (const source of Array.isArray(chapter?.source_chapters) ? chapter.source_chapters : []) {
+        const file = String(source?.file || '').toLowerCase();
+        const localChapterId = String(source?.local_chapter_id || '');
+        if (file && localChapterId) {
+          chapterMap.set(`${file}::${localChapterId}`, globalChapterId);
+        }
+      }
+
+      for (const fileName of Array.isArray(chapter?.source_files) ? chapter.source_files : []) {
+        const file = String(fileName || '').toLowerCase();
+        if (file) {
+          chapterMap.set(`${file}::ch1`, globalChapterId);
+        }
+      }
+
+      for (const section of Array.isArray(chapter?.sections) ? chapter.sections : []) {
+        const file = String(section?.source_file || '').toLowerCase();
+        const localSectionId = String(section?.local_section_id || '');
+        const globalSectionId = String(section?.section_id || '');
+        if (file && localSectionId && globalSectionId) {
+          sectionMap.set(`${file}::${localSectionId}`, {
+            globalChapterId,
+            globalSectionId,
+            title: typeof section?.title === 'string' ? section.title : undefined,
+          });
+        }
+      }
+    }
+
+    for (const item of Array.isArray(mergeData?.file_chapter_map) ? mergeData.file_chapter_map : []) {
+      const file = String(item?.file || '').toLowerCase();
+      const localChapterId = String(item?.local_chapter_id || '');
+      const globalChapterId = String(item?.global_chapter_id || '');
+      if (file && localChapterId && globalChapterId) {
+        chapterMap.set(`${file}::${localChapterId}`, globalChapterId);
+      }
+    }
+
+    for (const item of Array.isArray(mergeData?.section_map) ? mergeData.section_map : []) {
+      const file = String(item?.file || '').toLowerCase();
+      const localSectionId = String(item?.local_section_id || '');
+      const globalChapterId = String(item?.global_chapter_id || '');
+      const globalSectionId = String(item?.global_section_id || '');
+      if (file && localSectionId && globalChapterId && globalSectionId) {
+        sectionMap.set(`${file}::${localSectionId}`, {
+          globalChapterId,
+          globalSectionId,
+        });
+      }
+    }
+
+    return documents.map((doc) => {
+      const fileKey = doc.fileName.toLowerCase();
+      const pages = doc.pages.map((page: any) => {
+        const localChapterId = String(page?.chapter_id || '');
+        const localSectionId = String(page?.section_id || '');
+        const sectionMapping = sectionMap.get(`${fileKey}::${localSectionId}`);
+        const globalChapterId =
+          sectionMapping?.globalChapterId ||
+          chapterMap.get(`${fileKey}::${localChapterId}`) ||
+          localChapterId;
+        const globalSectionId = sectionMapping?.globalSectionId || localSectionId;
+
+        return {
+          ...page,
+          local_chapter_id: localChapterId || undefined,
+          local_section_id: localSectionId || undefined,
+          chapter_id: globalChapterId,
+          section_id: globalSectionId,
+          section_title: sectionMapping?.title || page?.section_title,
+        };
+      });
+
+      const docChapters = courseChapters
+        .map((chapter: any) => {
+          const sections = (Array.isArray(chapter?.sections) ? chapter.sections : [])
+            .filter((section: any) => String(section?.source_file || '').toLowerCase() === fileKey);
+          const sourceFiles = Array.isArray(chapter?.source_files) ? chapter.source_files.map((file: any) => String(file).toLowerCase()) : [];
+          if (sections.length === 0 && !sourceFiles.includes(fileKey)) return null;
+          return {
+            ...chapter,
+            sections,
+          };
+        })
+        .filter(Boolean);
+
+      return {
+        ...doc,
+        outline: docChapters.length > 0 ? { chapters: docChapters } : doc.outline,
+        outlineSource: 'global_course_outline',
+        pages,
+      };
+    });
+  }
+
+  private async normalizeGlobalCourseOutline(documents: PreprocessedSourceDocument[], llmContext: SkillContext): Promise<PreprocessedSourceDocument[]> {
+    if (documents.length <= 1) return documents;
+
+    const merger = skillRegistry.getSkill('global_outline_merger');
+    let mergeData: any = null;
+    if (merger && llmContext?.llmConfig?.apiKey) {
+      try {
+        const result = await merger.execute({
+          documents: documents.map((doc, index) => ({
+            fileName: doc.fileName,
+            uploadedIndex: index + 1,
+            outline: doc.outline,
+            outlineSource: doc.outlineSource,
+            pages: doc.pages,
+          })),
+          courseTitle: llmContext?.subject || '',
+        }, llmContext);
+        if (result.success && result.data?.course_outline?.chapters) {
+          mergeData = result.data;
+        } else if (result.error) {
+          console.warn(`[Orchestrator] Global outline merge skipped: ${result.error}`);
+        }
+      } catch (error: any) {
+        console.warn(`[Orchestrator] Global outline merge threw: ${error?.message || error}`);
+      }
+    }
+
+    return this.applyGlobalOutline(documents, mergeData || this.buildFallbackGlobalOutline(documents));
   }
 
   private parseScopePages(scopePages: string): number[] {
@@ -480,9 +767,46 @@ export class AgentOrchestrator {
     return [...values].sort((a, b) => a - b);
   }
 
+  private collectMetadataForSources(
+    usableDocs: PreprocessedSourceDocument[],
+    sources: Array<{ file: string; pages: string }>
+  ) {
+    const topicLabels = new Set<string>();
+    const chapterIds = new Set<string>();
+    const sectionIds = new Set<string>();
+
+    for (const source of sources) {
+      const doc = usableDocs.find((item) => item.fileName.toLowerCase() === source.file.toLowerCase());
+      if (!doc) continue;
+
+      const pageSet = new Set(this.parseScopePages(source.pages));
+      for (const page of doc.pages) {
+        const pageNumber = Number(page?.page_number) || 0;
+        if (!pageSet.has(pageNumber)) continue;
+
+        const chapterId = String(page?.chapter_id || '').trim();
+        const sectionId = String(page?.section_id || '').trim();
+        if (chapterId) chapterIds.add(chapterId);
+        if (sectionId) sectionIds.add(sectionId);
+        if (Array.isArray(page?.topic_labels)) {
+          page.topic_labels
+            .filter((label: any) => typeof label === 'string' && label.trim())
+            .slice(0, 6)
+            .forEach((label: string) => topicLabels.add(label.trim()));
+        }
+      }
+    }
+
+    return {
+      topicLabels: [...topicLabels].slice(0, 6),
+      chapterIds: [...chapterIds].slice(0, 8),
+      sectionIds: [...sectionIds].slice(0, 12),
+    };
+  }
+
   private normalizePlannerScopes(params: {
     plannerData: any;
-    usableDocs: Array<{ fileName: string; pages: any[] }>;
+    usableDocs: PreprocessedSourceDocument[];
     taskParams: Record<string, any>;
     numberOfItems: number;
   }): Map<number, PlannedSourceItem> {
@@ -500,33 +824,50 @@ export class AgentOrchestrator {
         continue;
       }
 
-      const file = String(scope?.file || '').trim();
-      const pages = String(scope?.pages || '').trim();
-      if (!file || !pages) {
+      const rawSources = Array.isArray(scope?.sources) && scope.sources.length > 0
+        ? scope.sources
+        : [{ file: scope?.file, pages: scope?.pages }];
+      const normalizedSources: Array<{ file: string; pages: string }> = [];
+      for (const rawSource of rawSources) {
+        const file = String(rawSource?.file || '').trim();
+        const pages = String(rawSource?.pages || '').trim();
+        if (!file || !pages) continue;
+
+        const matchedDoc = usableDocs.find((doc) => doc.fileName.toLowerCase() === file.toLowerCase());
+        if (!matchedDoc) continue;
+
+        const requestedPages = this.parseScopePages(pages);
+        const availablePages = new Set(matchedDoc.pages.map((page: any) => Number(page?.page_number) || 0));
+        if (requestedPages.length === 0 || !requestedPages.every((page) => availablePages.has(page))) continue;
+
+        normalizedSources.push({ file: matchedDoc.fileName, pages });
+      }
+
+      const firstSource = normalizedSources[0];
+      if (!firstSource) {
         continue;
       }
 
-      const matchedDoc = usableDocs.find((doc) => doc.fileName.toLowerCase() === file.toLowerCase());
-      if (!matchedDoc) {
-        continue;
-      }
-
-      const requestedPages = this.parseScopePages(pages);
-      const availablePages = new Set(matchedDoc.pages.map((page: any) => Number(page?.page_number) || 0));
-      if (requestedPages.length === 0 || !requestedPages.every((page) => availablePages.has(page))) {
-        continue;
-      }
-
-      const topicLabels = Array.isArray(scope?.topic_focus)
+      const sourceMetadata = this.collectMetadataForSources(usableDocs, normalizedSources);
+      const topicLabels = sourceMetadata.topicLabels.length > 0
+        ? sourceMetadata.topicLabels
+        : Array.isArray(scope?.topic_focus)
         ? scope.topic_focus.filter((value: any) => typeof value === 'string' && value.trim()).slice(0, 6)
         : [];
+      const chapterIds = sourceMetadata.chapterIds;
+      const sectionIds = sourceMetadata.sectionIds;
 
       byItem.set(itemNumber, {
         itemNumber,
         questionType: this.resolveQuestionTypeForItem(itemNumber, taskParams),
-        file: matchedDoc.fileName,
-        pages,
+        file: firstSource.file,
+        pages: firstSource.pages,
+        sources: normalizedSources,
+        scopeKind: typeof scope?.scope_kind === 'string' ? scope.scope_kind : undefined,
+        chapterIds,
+        sectionIds,
         topicLabels,
+        integrationGoal: typeof scope?.integration_goal === 'string' ? scope.integration_goal.trim() : undefined,
         rationale: typeof scope?.rationale === 'string' && scope.rationale.trim()
           ? scope.rationale.trim()
           : 'Selected by planner from compact page metadata.',
@@ -604,7 +945,9 @@ export class AgentOrchestrator {
       const type = String(doc?.type || doc?.name || '').toLowerCase();
       const docName = String(doc?.name || '').trim().toLowerCase();
       const matchesSelection = selectedFiles.length === 0 || selectedFiles.includes(docName);
-      return matchesSelection && typeof doc?.rawBase64 === 'string' && doc.rawBase64.trim() && (type.endsWith('pdf') || type.endsWith('pptx'));
+      const hasRawBase64 = typeof doc?.rawBase64 === 'string' && doc.rawBase64.trim();
+      const hasReusableIntake = doc?.intake && Array.isArray(doc.intake.pages) && doc.intake.pages.length > 0;
+      return matchesSelection && (hasRawBase64 || hasReusableIntake) && (type.endsWith('pdf') || type.endsWith('pptx'));
     });
 
     if (supportedDocs.length === 0) {
@@ -617,11 +960,12 @@ export class AgentOrchestrator {
     }
 
     const timeLimit = taskParams.minutesPerProblem || taskParams.minutesPerQuestion || taskParams.estimatedTime;
-    const preprocessedDocs = await Promise.all(supportedDocs.map(async (doc: any) => {
+    const preprocessedDocs: Array<PreprocessedSourceDocument | null> = await Promise.all(supportedDocs.map(async (doc: any) => {
       const result = await documentPreprocessor.execute({
         fileName: doc.name,
         fileType: doc.type,
         fileBase64: doc.rawBase64,
+        intake: doc.intake || null,
         targetMinutes: Number(timeLimit) || (moduleType === 'drills' ? 8 : 30),
       }, llmContext);
 
@@ -630,10 +974,38 @@ export class AgentOrchestrator {
         return null;
       }
 
+      const outlineRefiner = skillRegistry.getSkill('outline_refiner');
+      let outline = result.data.outline || null;
+      let outlineSource = result.data.outline_source || 'heuristic';
+      if (outlineRefiner && llmContext?.llmConfig?.apiKey && Array.isArray(result.data.pages) && result.data.pages.length > 0) {
+        try {
+          const refined = await outlineRefiner.execute({
+            fileName: doc.name,
+            fileType: doc.type,
+            pages: result.data.pages,
+            roughOutline: result.data.rough_outline || result.data.outline,
+          }, llmContext);
+          if (refined.success && refined.data?.chapters) {
+            outline = refined.data;
+            outlineSource = 'llm_refined';
+          } else if (refined.error) {
+            console.warn(`[Orchestrator] Outline refinement skipped for ${doc.name}: ${refined.error}`);
+          }
+        } catch (error: any) {
+          console.warn(`[Orchestrator] Outline refinement threw for ${doc.name}: ${error?.message || error}`);
+        }
+      }
+
+      const pagesWithRefinedOutline = outline
+        ? this.applyOutlineToPages(result.data.pages, outline)
+        : result.data.pages;
+
       return {
         fileName: doc.name,
-        pages: Array.isArray(result.data.pages)
-          ? result.data.pages.filter((page: any) => {
+        outline,
+        outlineSource,
+        pages: Array.isArray(pagesWithRefinedOutline)
+          ? pagesWithRefinedOutline.filter((page: any) => {
               const features = page?.features || {};
               const hasVisualSignal =
                 (Number(features?.imageCount) || 0) > 0 ||
@@ -646,10 +1018,11 @@ export class AgentOrchestrator {
       };
     }));
 
-    const usableDocs = preprocessedDocs.filter((doc): doc is { fileName: string; pages: any[] } => Boolean(doc && doc.pages.length > 0));
+    let usableDocs = preprocessedDocs.filter((doc): doc is PreprocessedSourceDocument => Boolean(doc && doc.pages.length > 0));
     if (usableDocs.length === 0) {
       return Array(numberOfItems).fill(null);
     }
+    usableDocs = await this.normalizeGlobalCourseOutline(usableDocs, llmContext);
 
     const preferredSpan =
       moduleType === 'drills'
@@ -726,7 +1099,7 @@ export class AgentOrchestrator {
 
       fileUsage.set(winner.file, (fileUsage.get(winner.file) || 0) + 1);
       usedPageKeys.add(`${winner.file}:${winner.pages}`);
-      winner.topicLabels.forEach((label) => {
+      winner.topicLabels.forEach((label: string) => {
         usedTopicCounts.set(label, (usedTopicCounts.get(label) || 0) + 1);
       });
 
@@ -754,7 +1127,26 @@ export class AgentOrchestrator {
         questionType,
         file: winner.file,
         pages: winner.pages,
+        sources: [{ file: winner.file, pages: winner.pages }],
+        scopeKind:
+          moduleType === 'labs'
+            ? 'same_chapter_multi_section'
+            : moduleType === 'homework'
+            ? 'two_chapter_bridge'
+            : moduleType === 'exams'
+            ? 'three_plus_chapter_fusion'
+            : 'single_section',
+        chapterIds: winner.chapterIds,
+        sectionIds: winner.sectionIds,
         topicLabels: winner.topicLabels,
+        integrationGoal:
+          moduleType === 'homework'
+            ? 'Bridge related concepts across the selected chapter scope.'
+            : moduleType === 'exams'
+            ? 'Fuse concepts across the selected chapter scope under exam constraints.'
+            : moduleType === 'labs'
+            ? 'Use multiple related sections in one hands-on workflow.'
+            : 'Check one focused section objective.',
         rationale: rationalePieces.join('; '),
       });
     }
@@ -778,12 +1170,12 @@ export class AgentOrchestrator {
           documents: plannerDocuments,
           planningGoals:
             moduleType === 'homework'
-              ? 'Balance chapter coverage, type distribution, gradual difficulty progression, and small multi-concept integration.'
+              ? 'Plan two-chapter bridges: balance coverage, type distribution, gradual difficulty progression, and explicit cross-chapter transfer.'
               : moduleType === 'exams'
-              ? 'Keep each item focused on one primary skill, align scope with points/time, preserve chapter balance, and avoid overly broad scopes.'
+              ? 'Plan three-plus-chapter concept fusion: each item should require integrating concepts from at least three chapters when available while preserving one primary skill target.'
               : moduleType === 'labs'
-              ? 'Choose coherent local mini-topics with actionable practice scope.'
-              : 'Choose tightly scoped source evidence for fast in-class questions.',
+              ? 'Choose same-chapter multi-section scopes with actionable practice requirements.'
+              : 'Choose exactly one section for each fast in-class question.',
           selectedChapters: selectedFiles,
         }, llmContext);
 
@@ -1139,33 +1531,45 @@ export class AgentOrchestrator {
     plannedSource: PlannedSourceItem,
     fullContext: string
   ): { content: string; sources: Array<{ file: string; pages: string }> } {
-    const matchedBlock = fileBlocks.find((block) => block.fileName.toLowerCase() === plannedSource.file.toLowerCase());
-    if (!matchedBlock) {
-      console.warn(`[Orchestrator] Planned source file not found in parsed context: ${plannedSource.file}. Falling back to full context.`);
-      return {
-        content: fullContext,
-        sources: [{ file: plannedSource.file, pages: plannedSource.pages }],
-      };
+    const plannedSources = Array.isArray(plannedSource.sources) && plannedSource.sources.length > 0
+      ? plannedSource.sources
+      : [{ file: plannedSource.file, pages: plannedSource.pages }];
+    const contents: string[] = [];
+    const sources: Array<{ file: string; pages: string }> = [];
+
+    for (const source of plannedSources) {
+      const matchedBlock = fileBlocks.find((block) => block.fileName.toLowerCase() === source.file.toLowerCase());
+      if (!matchedBlock) {
+        console.warn(`[Orchestrator] Planned source file not found in parsed context: ${source.file}.`);
+        continue;
+      }
+
+      const filteredContent = this.extractContentByPages(matchedBlock.content, source.pages);
+      const actualContent = filteredContent
+        .replace(/\[PAGE:\s*\d+\]/gi, '')
+        .replace(/FILE:\s*[^\n]+/gi, '')
+        .replace(/---/g, '')
+        .trim();
+
+      if (filteredContent.includes('[EMPTY_CONTENT:') || actualContent.length < 20) {
+        console.warn(`[Orchestrator] Planned source extraction was too small for ${source.file} pages ${source.pages}. Using the full file block instead.`);
+        contents.push(matchedBlock.content);
+      } else {
+        contents.push(filteredContent);
+      }
+      sources.push({ file: source.file, pages: source.pages });
     }
 
-    const filteredContent = this.extractContentByPages(matchedBlock.content, plannedSource.pages);
-    const actualContent = filteredContent
-      .replace(/\[PAGE:\s*\d+\]/gi, '')
-      .replace(/FILE:\s*[^\n]+/gi, '')
-      .replace(/---/g, '')
-      .trim();
-
-    if (filteredContent.includes('[EMPTY_CONTENT:') || actualContent.length < 20) {
-      console.warn(`[Orchestrator] Planned source extraction was too small for ${plannedSource.file} pages ${plannedSource.pages}. Using the full file block instead.`);
+    if (contents.length === 0) {
       return {
-        content: matchedBlock.content,
-        sources: [{ file: plannedSource.file, pages: plannedSource.pages }],
+        content: fullContext,
+        sources: plannedSources,
       };
     }
 
     return {
-      content: filteredContent,
-      sources: [{ file: plannedSource.file, pages: plannedSource.pages }],
+      content: contents.join('\n\n---\n\n'),
+      sources,
     };
   }
 
@@ -1702,7 +2106,7 @@ export class AgentOrchestrator {
     const solutionData = solutionResult.data;
     // Ensure solutionText is always a string
     const rawSolutionText = solutionData?.solution || solutionData?.code || '';
-    const solutionText = typeof rawSolutionText === 'string'
+    let solutionText = typeof rawSolutionText === 'string'
       ? rawSolutionText
       : typeof solutionData === 'string'
         ? solutionData
@@ -1717,6 +2121,9 @@ export class AgentOrchestrator {
         : solutionData?.explanation
         ? JSON.stringify(solutionData.explanation)
         : '';
+    if (!solutionText.trim() && solutionExplanation.trim()) {
+      solutionText = solutionExplanation;
+    }
 
     // Step 3: Translate if secondary language is enabled
     let translatedQuestionText = '';

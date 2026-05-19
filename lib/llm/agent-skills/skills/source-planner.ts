@@ -38,21 +38,25 @@ export class SourcePlannerSkill extends BaseSkill {
       } = input;
       const moduleRules = moduleType === 'homework'
         ? `HOMEWORK-SPECIFIC RULES:
-- Build an assignment-like progression: earlier items can be narrower, later items can integrate a small number of related ideas.
-- Balance chapter/file coverage across the whole set rather than clustering too many items on one source.
-- Allow modest multi-concept integration, but keep each source scope local and teachable.`
+- Use scope_kind "two_chapter_bridge".
+- Prefer exactly 2 chapter_ids when enough chapters exist.
+- Earlier items may stay local, but the overall set must include chapter-to-chapter transfer, comparison, or dependency.
+- When two chapters are in different files, use the sources array with one source per file.`
         : moduleType === 'exams'
         ? `EXAM-SPECIFIC RULES:
-- Each item should map to one primary skill or misconception target.
-- Keep scopes especially focused so exam questions stay discriminative and time-bounded.
-- Prefer 1-2 page scopes unless a slightly broader local scope is clearly necessary.
-- Avoid giving multiple exam items the exact same page range unless there is no better option.`
+- Use scope_kind "three_plus_chapter_fusion".
+- Prefer 3 or more chapter_ids when enough chapters exist.
+- Each item should fuse concepts across chapters, not merely sample isolated pages.
+- Keep each item anchored to a primary skill under time pressure, but require cross-chapter reasoning.
+- When chapters are in different files, use the sources array with one source per file.`
         : moduleType === 'labs'
         ? `LAB-SPECIFIC RULES:
-- Prefer 2-4 page scopes around one coherent mini-topic.
-- Choose scopes that can support actionable requirements, testing, and debugging steps.`
+- Use scope_kind "same_chapter_multi_section".
+- Use 2-4 related section_ids within exactly one chapter_id.
+- Choose scopes that can support actionable requirements, testing, debugging, implementation, or design steps.`
         : `DRILL-SPECIFIC RULES:
-- Keep scopes very tight: usually 1 page, occasionally 2 if strongly justified.
+- Use scope_kind "single_section".
+- Use exactly one section_id.
 - Favor one local concept that supports a quick in-class check.`;
 
       const messages = [
@@ -60,17 +64,21 @@ export class SourcePlannerSkill extends BaseSkill {
           role: 'system',
           content: `You are an expert curriculum planner for university teaching materials.
 
-Your job is to plan LOCAL source scopes for downstream question generation.
+Your job is to plan source scopes for downstream question generation.
 You do NOT write the questions. You only decide which file/pages each item should use.
 
 PLANNING RULES:
-- Read only the provided page metadata.
-- Choose page scopes that are local and focused.
+- Read only the provided page metadata and outline.
 - Prefer conceptually coherent scopes over broad coverage.
 - Avoid repeating the same pages unless absolutely necessary.
 - Match the planned scope to the requested question type.
 - Use ONLY filenames and page ranges that actually exist in the metadata.
 - Never invent files, pages, or concepts.
+- Skip cover, agenda, transition, administrative, and empty pages unless they contain examinable concepts.
+- Treat scope_kind, chapter_ids, section_ids, and integration_goal as a binding contract for the question generator.
+- chapter_ids and section_ids are GLOBAL course IDs when a global course outline is present; use them for cross-chapter planning.
+- Every chapter_id and section_id you list MUST be represented by at least one selected page in sources.
+- For homework/exams, if the target chapters are in different files, sources MUST include those different files.
 
 ${moduleRules}
 
@@ -80,9 +88,14 @@ Return ONLY valid JSON:
     {
       "item_number": 1,
       "question_type": "coding",
+      "scope_kind": "single_section",
       "file": "lecture3.pdf",
       "pages": "12-13",
+      "sources": [{ "file": "lecture3.pdf", "pages": "12-13" }],
+      "chapter_ids": ["ch1"],
+      "section_ids": ["ch1-s2"],
       "topic_focus": ["list slicing", "mutation"],
+      "integration_goal": "What relationship or transfer the question should test",
       "rationale": "Short reason why these pages best fit the item"
     }
   ],

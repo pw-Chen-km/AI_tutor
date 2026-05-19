@@ -155,36 +155,15 @@ export function LectureRehearsalModule() {
         return (contextFiles || []).map((f) => `FILE: ${f.name}\n${f.content}`).join('\n\n---\n\n');
     }, [contextFiles]);
 
-    const pptxContextFiles = useMemo(() => {
-        return (contextFiles || []).filter((f: any) => typeof f?.name === 'string' && f.name.toLowerCase().endsWith('.pptx'));
-    }, [contextFiles]);
-    const pptxFiles = useMemo(() => {
-        return (pptxContextFiles || [])
-            .map((f: any) => ({
-                name: f?.name || 'pptx',
-                base64: f?.rawBase64 || '',
-            }))
-            .filter((f: any) => typeof f.base64 === 'string' && f.base64.length > 0);
-    }, [pptxContextFiles]);
-    const pptxBase64 = (pptxContextFiles[0] as any)?.rawBase64 || '';
-    const pptxFileContexts = useMemo(() => {
-        return (pptxContextFiles || []).map((f: any) => ({
-            name: f?.name || 'pptx',
-            context: `FILE: ${f?.name || 'pptx'}\n${f?.content || ''}`,
+    const lectureDocuments = useMemo(() => {
+        return (contextFiles || []).map((f: any) => ({
+            name: f?.name || 'document',
+            type: String(f?.name || '').split('.').pop()?.toLowerCase() || f?.type || 'unknown',
+            content: f?.content || '',
+            rawBase64: f?.rawBase64 || '',
+            intake: f?.intake || null,
         }));
-    }, [pptxContextFiles]);
-    const pdfContextFiles = useMemo(() => {
-        return (contextFiles || []).filter((f: any) => typeof f?.name === 'string' && f.name.toLowerCase().endsWith('.pdf'));
     }, [contextFiles]);
-    const pdfFiles = useMemo(() => {
-        return (pdfContextFiles || [])
-            .map((f: any) => ({
-                name: f?.name || 'pdf',
-                base64: f?.rawBase64 || '',
-                context: `FILE: ${f?.name || 'pdf'}\n${f?.content || ''}`,
-            }))
-            .filter((f: any) => typeof f.base64 === 'string' && f.base64.length > 0);
-    }, [pdfContextFiles]);
 
     const handleGenerate = async () => {
         if ((contextFiles || []).length === 0) {
@@ -221,10 +200,7 @@ export function LectureRehearsalModule() {
                     audienceLevel,
                     targetMinutes,
                     context,
-                    pptxBase64,
-                    pptxFiles,
-                    pptxFileContexts,
-                    pdfFiles,
+                    lectureDocuments,
                 }),
             });
             
@@ -460,15 +436,16 @@ export function LectureRehearsalModule() {
         const filename = `${baseName}_${dateSuffix}.pptx`;
 
         const sourceName = lectureItem?.source_file || '';
+        const pptxDocuments = lectureDocuments.filter((doc) => doc.type === 'pptx' && doc.rawBase64);
         const pptxForLecture =
-            pptxFiles[lectureIndex] ||
-            pptxFiles.find((f) => f.name === sourceName) ||
-            (pptxBase64 ? { name: sourceName || 'pptx', base64: pptxBase64 } : null);
+            pptxDocuments[lectureIndex] ||
+            pptxDocuments.find((doc) => doc.name === sourceName) ||
+            null;
         // Use editableSlides first (user-edited content), then fall back to original
         const slidesForLecture = editableSlides.length > 0
             ? editableSlides
             : (Array.isArray(lectureItem?.slides) ? lectureItem.slides : []);
-        if (!pptxForLecture?.base64 || slidesForLecture.length === 0) {
+        if (!pptxForLecture?.rawBase64 || slidesForLecture.length === 0) {
             throw new Error('PPTX context file or per-slide scripts are missing.');
         }
         
@@ -495,7 +472,7 @@ export function LectureRehearsalModule() {
         const res = await fetch('/api/lecture-rehearsal/export-pptx-notes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename, pptxBase64: pptxForLecture.base64, notes }),
+            body: JSON.stringify({ filename, pptxBase64: pptxForLecture.rawBase64, notes }),
         });
         if (!res.ok) {
             const text = await res.text().catch(() => '');

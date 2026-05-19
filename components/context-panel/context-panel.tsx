@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Upload, File, X, FileText, FileSpreadsheet, FolderOpen, Globe, GraduationCap, Users, Image, Archive } from 'lucide-react';
 import { useCallback, useState, useEffect } from 'react';
-import { parseFile, parseFileForEvaluation } from '@/lib/parsers/file-parser';
+import { parseFileDetailed, parseFileForEvaluation } from '@/lib/parsers/file-parser';
 
 const RAW_FILE_API_LIMIT_BYTES = 3 * 1024 * 1024;
 
@@ -276,16 +276,24 @@ export function ContextPanel() {
                     assertApiFileSize(file, 'PDF/PPTX 上傳與生成');
                 }
                 const rawBase64 = (ext === 'pptx' || ext === 'pdf') ? arrayBufferToBase64(await file.arrayBuffer()) : undefined;
-                const content =
-                    isLectureRehearsal && ext === 'pdf'
-                        ? `[PDF DIRECT MODE: ${file.name}]`
-                        : await parseFile(file);
+                const intakeIntent = isLectureRehearsal ? 'read_for_script_generation' : 'generic';
+                const parsed = await parseFileDetailed(file, intakeIntent);
 
                 addContextFile({
                     id: Math.random().toString(36).substring(7),
                     name: file.name,
                     type: file.type || file.name.split('.').pop() || 'unknown',
-                    content,
+                    content: parsed.content,
+                    intake: {
+                        fileName: parsed.fileName || file.name,
+                        fileType: parsed.fileType || ext || file.type || 'unknown',
+                        intent: parsed.intent || intakeIntent,
+                        content: parsed.content,
+                        strategy: parsed.strategy,
+                        pages: parsed.pages,
+                        warnings: parsed.warnings,
+                        metadata: parsed.metadata,
+                    },
                     rawBase64,
                     uploadedAt: new Date(),
                 });
