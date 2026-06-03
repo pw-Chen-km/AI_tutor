@@ -11,7 +11,14 @@ import { Sparkles, Copy, Check, Loader2, RotateCcw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import { defaultWeights, getSubjectConfig, getHomeworkTypes, weightsToCounts } from '@/lib/subjects';
+import {
+    defaultWeights,
+    getSubjectConfig,
+    getHomeworkTypes,
+    hasCompletedSubjectDetectionForContextFiles,
+    resolveDetectedUiSubjectFromContextFiles,
+    weightsToCounts,
+} from '@/lib/subjects';
 import { ensureMarkdownCodeFences, wrapSolutionAsCodeIfCoding } from '@/lib/llm/format';
 import { CodeBlock } from '@/components/shared/code-block';
 import { MixedContent } from '@/components/shared/mixed-content';
@@ -75,18 +82,33 @@ export function HomeworkModule() {
     const [selectedChapters, setSelectedChapters] = useState<string[]>([]);
     const [numberOfProblems, setNumberOfProblems] = useState<number>(5);
     const [minutesPerProblem, setMinutesPerProblem] = useState<number>(20);
+    const [debugAllowFallback, setDebugAllowFallback] = useState<boolean>(false);
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
     const [selectedVariants, setSelectedVariants] = useState<Record<string, string[]>>({});
     const [displayedVariant, setDisplayedVariant] = useState<Record<string, string>>({});
-    const subjectConfig = useMemo(() => getSubjectConfig(subject), [subject]);
-    const homeworkTypes = useMemo(() => getHomeworkTypes(subject, customQuestionTypes?.homework), [subject, customQuestionTypes?.homework]);
-    const [typeWeights, setTypeWeights] = useState<Record<string, number>>(() => defaultWeights(homeworkTypes));
+    const detectedSubject = useMemo(() => resolveDetectedUiSubjectFromContextFiles(contextFiles), [contextFiles]);
+    const subjectDetectionDone = useMemo(
+        () => hasCompletedSubjectDetectionForContextFiles(contextFiles),
+        [contextFiles]
+    );
+    const subjectReady = contextFiles.length > 0 && subjectDetectionDone;
+    const effectiveSubject = subjectReady ? (detectedSubject || subject) : subject;
+    const subjectConfig = useMemo(() => getSubjectConfig(effectiveSubject), [effectiveSubject]);
+    const homeworkTypes = useMemo(
+        () => (subjectReady ? getHomeworkTypes(effectiveSubject, customQuestionTypes?.homework) : []),
+        [subjectReady, effectiveSubject, customQuestionTypes?.homework]
+    );
+    const [typeCounts, setTypeCounts] = useState<Record<string, number>>(() =>
+        weightsToCounts(numberOfProblems, defaultWeights(homeworkTypes))
+    );
 
     useEffect(() => {
-        setTypeWeights(defaultWeights(homeworkTypes));
-    }, [homeworkTypes]);
-
-    const typeCounts = useMemo(() => weightsToCounts(numberOfProblems, typeWeights), [numberOfProblems, typeWeights]);
+        setTypeCounts(weightsToCounts(numberOfProblems, defaultWeights(homeworkTypes)));
+    }, [homeworkTypes, numberOfProblems]);
+    const unassignedTypeCount = useMemo(() => {
+        const assigned = Object.values(typeCounts).reduce((sum, count) => sum + Math.max(0, Number(count) || 0), 0);
+        return Math.max(0, numberOfProblems - assigned);
+    }, [typeCounts, numberOfProblems]);
 
     // Get safe problems array
     const homework = generatedContent.homework[0] as Homework | undefined;
@@ -287,6 +309,7 @@ export function HomeworkModule() {
                         typeCounts,
                         availableFiles: contextFiles.map((f) => f.name),
                         sourceDocuments,
+                        debugAllowFallback,
                         selectedChapters: selectedChapters.length > 0 ? selectedChapters : undefined,
                     },
                     llmConfig: activeLLMConfig,
@@ -502,6 +525,7 @@ export function HomeworkModule() {
                         subject,
                         availableFiles: contextFiles.map((f) => f.name),
                         sourceDocuments,
+                        debugAllowFallback,
                     },
                     llmConfig: activeLLMConfig,
                     languageConfig: {
@@ -576,6 +600,7 @@ export function HomeworkModule() {
                                     minutesPerProblem,
                                     subject,
                                     sourceDocuments,
+                                    debugAllowFallback,
                                 },
                                 llmConfig: activeLLMConfig,
                                 languageConfig: {
@@ -671,7 +696,7 @@ export function HomeworkModule() {
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-3 gap-4">
                         <div>
                             <Label htmlFor="hw-num-problems">Number of Problems</Label>
                             <Input
@@ -696,17 +721,33 @@ export function HomeworkModule() {
                                 onChange={(e) => setMinutesPerProblem(Math.max(1, Math.min(180, Number(e.target.value) || 1)))}
                             />
                         </div>
+                        <div>
+                            <Label htmlFor="hw-debug-fallback">Debug: Allow Fallback</Label>
+                            <div className="h-10 flex items-center">
+                                <input
+                                    id="hw-debug-fallback"
+                                    type="checkbox"
+                                    checked={debugAllowFallback}
+                                    onChange={(e) => setDebugAllowFallback(e.target.checked)}
+                                />
+                            </div>
+                        </div>
                     </div>
 
-                    <QuestionTypeMix
-                        title="Question Type Mix"
-                        subjectLabel={subjectConfig.label}
-                        types={homeworkTypes}
-                        total={numberOfProblems}
-                        weights={typeWeights}
-                        counts={typeCounts}
-                        onChange={setTypeWeights}
-                    />
+                    {subjectReady ? (
+                        <QuestionTypeMix
+                            title="Question Type Mix"
+                            subjectLabel={subjectConfig.label}
+                            types={homeworkTypes}
+                            total={numberOfProblems}
+                            counts={typeCounts}
+                            onChange={setTypeCounts}
+                        />
+                    ) : (
+                        <p className="text-sm text-slate-500">
+                            Detecting subject from uploaded materials. Question types will appear after detection.
+                        </p>
+                    )}
 
                     <div>
                         <h4 className="text-sm font-medium mb-2">Chapter Selection (Optional)</h4>
@@ -737,7 +778,7 @@ export function HomeworkModule() {
 
                     <Button
                         onClick={handleGenerate}
-                        disabled={loading || contextFiles.length === 0}
+                        disabled={loading || contextFiles.length === 0 || !subjectReady || unassignedTypeCount !== 0}
                         size="lg"
                         className="w-full"
                     >
@@ -772,6 +813,16 @@ export function HomeworkModule() {
                     {contextFiles.length === 0 && (
                         <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
                             ⚠️ Please upload course materials first
+                        </p>
+                    )}
+                    {contextFiles.length > 0 && !subjectReady && (
+                        <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+                            ⚠️ Please wait for subject detection before assigning question types
+                        </p>
+                    )}
+                    {unassignedTypeCount > 0 && (
+                        <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+                            ⚠️ Please assign all questions. Remaining: {unassignedTypeCount}
                         </p>
                     )}
                 </CardContent>
@@ -987,7 +1038,7 @@ export function HomeworkModule() {
                                             availableFiles={contextFiles}
                                             currentSources={problem.sources}
                                             isLoading={regenerating[index]}
-                                            questionTypes={customQuestionTypes.homework || []}
+                                            questionTypes={homeworkTypes.map((type) => type.id)}
                                             currentQuestionType={problem.type}
                                             onRegenerate={async (selectedFile, selectedPages, selectedQuestionType) => {
                                                 if (!safeHomework) return;
@@ -1013,6 +1064,7 @@ export function HomeworkModule() {
                                                                 selectedPages,
                                                                 availableFiles: [selectedFile],
                                                                 sourceDocuments,
+                                                                debugAllowFallback,
                                                             },
                                                             llmConfig: activeLLMConfig,
                                                             languageConfig: {

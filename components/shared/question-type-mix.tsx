@@ -1,5 +1,6 @@
 'use client';
 
+import { Input } from '@/components/ui/input';
 import { QuestionTypeConfig } from '@/lib/subjects';
 
 export function QuestionTypeMix(props: {
@@ -7,12 +8,13 @@ export function QuestionTypeMix(props: {
     subjectLabel?: string;
     types: QuestionTypeConfig[];
     total: number;
-    weights: Record<string, number>;
     counts: Record<string, number>;
-    onChange: (nextWeights: Record<string, number>) => void;
+    onChange: (nextCounts: Record<string, number>) => void;
     description?: string;
 }) {
-    const { title, subjectLabel, types, total, weights, counts, onChange, description } = props;
+    const { title, subjectLabel, types, total, counts, onChange, description } = props;
+    const assigned = types.reduce((sum, t) => sum + Math.max(0, Number(counts[t.id]) || 0), 0);
+    const remaining = Math.max(0, total - assigned);
 
     return (
         <div className="space-y-2">
@@ -22,24 +24,33 @@ export function QuestionTypeMix(props: {
             </h4>
             <p className="text-xs text-slate-500">
                 {description ||
-                    `Use sliders to adjust the proportion. Counts on the right are the exact number per type (sum = ${total}).`}
+                    `Directly assign question counts per type. Total must be ${total}.`}
+            </p>
+            <p className="text-xs text-slate-500">
+                Assigned: {assigned} / {total} · Remaining: {remaining}
             </p>
             <div className="space-y-3">
                 {types.map((t) => {
-                    const count = counts[t.id] ?? 0;
-                    // If count is 0, force weight to 0 to ensure slider is at leftmost position
-                    const effectiveWeight = count === 0 ? 0 : (weights[t.id] ?? 0);
+                    const current = Math.max(0, Number(counts[t.id]) || 0);
+                    const otherAssigned = assigned - current;
+                    const maxAllowed = Math.max(0, total - otherAssigned);
                     return (
-                        <div key={t.id} className="grid grid-cols-[140px_1fr_48px] items-center gap-3">
+                        <div key={t.id} className="grid grid-cols-[140px_120px] items-center gap-3">
                             <div className="text-sm text-slate-700 dark:text-slate-300">{t.label}</div>
-                            <input
-                                type="range"
+                            <Input
+                                type="number"
                                 min={0}
-                                max={100}
-                                value={effectiveWeight}
-                                onChange={(e) => onChange({ ...weights, [t.id]: Number(e.target.value) || 0 })}
+                                max={maxAllowed}
+                                step={1}
+                                inputMode="numeric"
+                                value={current}
+                                onChange={(e) => {
+                                    const raw = Number(e.target.value);
+                                    const next = Number.isFinite(raw) ? Math.floor(raw) : 0;
+                                    const clamped = Math.max(0, Math.min(maxAllowed, next));
+                                    onChange({ ...counts, [t.id]: clamped });
+                                }}
                             />
-                            <div className="text-xs text-slate-500 text-right">{count}</div>
                         </div>
                     );
                 })}

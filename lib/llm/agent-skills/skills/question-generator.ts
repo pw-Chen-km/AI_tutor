@@ -8,6 +8,75 @@ import { BaseSkill } from '../base-skill';
 import { SkillInput, SkillOutput, SkillContext, SkillMetadata } from '../types';
 import promptTemplates from '../../prompt-templates.json';
 import { calculateDifficulty, getQuestionTypeGuidelines, getQuestionTypePromptAddendum } from './question-type-specs';
+import { SubjectProfile } from './subject-profile-loader';
+import { assembleSubjectSkillPack } from '../subject-skills/resolver';
+import { runFormatQuestionScript } from '../subject-skills/format-registry';
+import { formatMetadataCatalogForPrompt, scanSubjectSkillCatalog } from '../subject-skills/catalog';
+
+function buildSubjectAwareQuestionShape(questionType: string, profile: SubjectProfile): string {
+  if (profile?.questionShapes && typeof profile.questionShapes[questionType] === 'string') {
+    return profile.questionShapes[questionType];
+  }
+  return buildQuestionShapeGuidance(questionType);
+}
+
+function buildSubjectAwareSectionGuidance(profile: SubjectProfile): string {
+  const labels = Array.isArray(profile?.sectionLabels) ? profile.sectionLabels : [];
+  if (labels.length === 0) return '';
+  const formattingHints: string[] = [];
+  if (profile.formatting?.preferCodeFences && profile.formatting?.codeLanguage) {
+    formattingHints.push(`Wrap any actual code in \`\`\`${profile.formatting.codeLanguage}\`\`\` fenced blocks.`);
+  }
+  if (profile.formatting?.preferCodeFences === false) {
+    formattingHints.push('Do NOT wrap text in code fences (```...```). Use markdown headings, lists, and block quotes instead.');
+  }
+  if (profile.formatting?.quoteWith === '>') {
+    formattingHints.push('Quote passages from the source using markdown block quotes (>), not code fences.');
+  }
+  if (profile.formatting?.useMarkdownTables) {
+    formattingHints.push('Render any multi-row dataset as a markdown table.');
+  }
+  if (profile.formatting?.currencyRequired) {
+    formattingHints.push('Always include currency code (USD/TWD/EUR/etc.) with monetary values.');
+  }
+  const labelLine = `When the question benefits from short structured chunks, use markdown headings drawn from this label set: ${labels.join(', ')}.`;
+  return [labelLine, ...formattingHints].filter(Boolean).join('\n');
+}
+
+function buildSubjectPreferredTypesNote(profile: SubjectProfile, currentType: string): string {
+  const supported = Array.isArray(profile?.supportedQuestionTypes) ? profile.supportedQuestionTypes : [];
+  if (supported.length === 0) return '';
+  if (supported.includes(currentType)) return '';
+  const preferred = Array.isArray(profile?.preferredQuestionTypes) && profile.preferredQuestionTypes.length > 0
+    ? profile.preferredQuestionTypes
+    : supported;
+  return `NOTE: The detected subject (${profile.label}) typically uses ${preferred.slice(0, 4).join(', ')}. The requested type '${currentType}' is unusual for this subject; produce it only if the source material genuinely supports it, otherwise reshape it into the closest supported form while preserving the user's chosen type label.`;
+}
+
+function resolveQuestionTypeForSubject(params: {
+  requestedType: string;
+  profile: SubjectProfile;
+  strict: boolean;
+}): { effectiveType: string; changed: boolean } {
+  const requested = String(params.requestedType || '').trim().toLowerCase();
+  const supported = Array.isArray(params.profile?.supportedQuestionTypes)
+    ? params.profile.supportedQuestionTypes.map((t) => String(t || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  if (!requested || supported.length === 0) {
+    return { effectiveType: requested || 'short_answer', changed: false };
+  }
+  if (supported.includes(requested)) {
+    return { effectiveType: requested, changed: false };
+  }
+  if (!params.strict) {
+    return { effectiveType: requested, changed: false };
+  }
+  const preferred = Array.isArray(params.profile?.preferredQuestionTypes)
+    ? params.profile.preferredQuestionTypes.map((t) => String(t || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  const fallback = preferred.find((t) => supported.includes(t)) || supported[0];
+  return { effectiveType: fallback || requested, changed: Boolean(fallback && fallback !== requested) };
+}
 
 function sanitizeMultipleChoiceOption(option: any): string {
   let text = String(option ?? '').trim();
@@ -358,6 +427,9 @@ export class QuestionGeneratorSkill extends BaseSkill {
 
     try {
       const { context: userContext, taskType, questionType, difficulty: providedDifficulty, constraints, timeLimit, points } = input;
+      const requestedQuestionType = String(questionType || '').trim().toLowerCase();
+      const debugAllowFallback = Boolean((input as any).debugAllowFallback);
+      const strictTypeEnforcement = !debugAllowFallback;
       const pdfFileData = typeof (input as any).pdfFileData === 'string' ? (input as any).pdfFileData : '';
       const pdfFilename = typeof (input as any).pdfFilename === 'string' ? (input as any).pdfFilename : '';
       const hasDirectPdfAttachment = Boolean(pdfFileData && pdfFilename);
@@ -365,15 +437,58 @@ export class QuestionGeneratorSkill extends BaseSkill {
       // Calculate difficulty based on module type and time limit if not provided
       const difficulty = providedDifficulty || calculateDifficulty(taskType, timeLimit);
 
-      // Get question type specific guidelines (using new skills)
-      const questionTypeGuidelines = getQuestionTypeGuidelines(questionType, difficulty as 'easy' | 'medium' | 'hard', taskType, timeLimit);
-      const questionTypePromptAddendum = getQuestionTypePromptAddendum(questionType);
-      const questionShapeGuidance = buildQuestionShapeGuidance(questionType);
-      const questionSelfCheck = buildQuestionSelfCheck(questionType);
-      const questionSchemaAddendum = buildQuestionSchemaAddendum(questionType);
-      const questionGenerationProtocol = buildQuestionGenerationProtocol(questionType);
+      const subjectHint =
+        (typeof (input as any)?.subjectId === 'string' && (input as any).subjectId) ||
+        (typeof (input as any)?.detectedSubjectId === 'string' && (input as any).detectedSubjectId) ||
+        (typeof context?.subject === 'string' && context.subject) ||
+        '';
 
-      this.log('info', `Using question type guidelines for ${questionType} (${difficulty} difficulty, ${timeLimit || 'N/A'} min)`);
+      const preselectedProfile = (input as any)?.subjectProfile;
+      const explicitPreselectedId =
+        typeof (input as any)?.preselectedSubjectId === 'string' && (input as any).preselectedSubjectId.trim()
+          ? String((input as any).preselectedSubjectId).trim()
+          : '';
+      const preselectedId =
+        preselectedProfile && typeof preselectedProfile.id === 'string'
+          ? preselectedProfile.id
+          : explicitPreselectedId || undefined;
+
+      const skillPack = await assembleSubjectSkillPack({
+        context: userContext,
+        questionType: requestedQuestionType,
+        taskType,
+        skillContext: context,
+        subjectHint,
+        allowReferenceFallback: debugAllowFallback,
+        preselectedSubjectId: preselectedId,
+      });
+
+      const subjectProfile: SubjectProfile = skillPack.profile;
+      const resolvedType = resolveQuestionTypeForSubject({
+        requestedType: requestedQuestionType,
+        profile: subjectProfile,
+        strict: strictTypeEnforcement,
+      });
+      const effectiveQuestionType = resolvedType.effectiveType || requestedQuestionType;
+      let routingTokens = skillPack.tokensUsedRouting || 0;
+
+      this.log('info', `Subject skill agent: ${subjectProfile.id} — ${skillPack.routing.rationale}`);
+      this.log('info', `Loaded references: ${skillPack.routing.referenceFiles.join(', ') || '(none)'}`);
+
+      const subjectCatalogBlock = formatMetadataCatalogForPrompt(scanSubjectSkillCatalog());
+
+      // Get question type specific guidelines (using new skills)
+      const questionTypeGuidelines = getQuestionTypeGuidelines(effectiveQuestionType, difficulty as 'easy' | 'medium' | 'hard', taskType, timeLimit);
+      const questionTypePromptAddendum = getQuestionTypePromptAddendum(effectiveQuestionType);
+      const questionShapeGuidance = buildSubjectAwareQuestionShape(effectiveQuestionType, subjectProfile);
+      const questionSelfCheck = buildQuestionSelfCheck(effectiveQuestionType);
+      const questionSchemaAddendum = buildQuestionSchemaAddendum(effectiveQuestionType);
+      const questionGenerationProtocol = buildQuestionGenerationProtocol(effectiveQuestionType);
+      const subjectSectionGuidance = buildSubjectAwareSectionGuidance(subjectProfile);
+      const subjectPreferredTypesNote = buildSubjectPreferredTypesNote(subjectProfile, effectiveQuestionType);
+      const subjectPromptAddendum = String(subjectProfile?.promptAddendum || '').trim();
+
+      this.log('info', `Using question type guidelines for ${effectiveQuestionType} (${difficulty} difficulty, ${timeLimit || 'N/A'} min)`);
 
       // Get task-specific prompt template
       const template = (promptTemplates as any)[taskType];
@@ -440,7 +555,7 @@ export class QuestionGeneratorSkill extends BaseSkill {
       
       const jsonSchemaExample = `{
   "question": "string (the actual question text - this is REQUIRED and must not be empty)",
-  "type": "${questionType}",
+  "type": "${effectiveQuestionType}",
   "difficulty": "${difficulty}",
   "title": "string (a short descriptive title for this question, e.g., 'List Comprehension' or 'Binary Search')",
   "sources": [${sourcesExample}],
@@ -470,15 +585,31 @@ ${questionSchemaAddendum.replace(/number/g, timeEstimate).replace(/"string"/g, '
         {
           role: 'system',
           content: `You are an expert question generator for educational content.
-Your task is to generate ONE ${questionType} question for ${taskType} assessment.
+Your task is to generate ONE ${effectiveQuestionType} question for ${taskType} assessment.
 
+SUBJECT SKILL AGENT (progressive disclosure):
+- Router chose: ${subjectProfile.label} (${subjectProfile.id})
+- Rationale: ${skillPack.routing.rationale}
+- References loaded: ${skillPack.routing.referenceFiles.join(', ') || 'overview only'}
+
+AVAILABLE SUBJECT SKILLS (metadata catalog — for consistency):
+${subjectCatalogBlock}
+
+LOADED SKILL BODY:
+${skillPack.skillBody ? skillPack.skillBody.slice(0, 3500) : '(none)'}
+
+LOADED REFERENCE DOCS (follow these structures exactly):
+${skillPack.referencesText ? skillPack.referencesText.slice(0, 6000) : '(none)'}
+
+${subjectPromptAddendum ? `${subjectPromptAddendum}\n` : ''}${subjectSectionGuidance ? `${subjectSectionGuidance}\n` : ''}${subjectPreferredTypesNote ? `${subjectPreferredTypesNote}\n` : ''}
 ${questionTypeGuidelines}
 ${questionTypePromptAddendum}
 ${questionShapeGuidance}
 ${questionGenerationProtocol}
 
 CONSTRAINTS:
-- Question type: ${questionType}
+- Requested question type: ${requestedQuestionType}
+- Effective question type (must follow): ${effectiveQuestionType}
 - Difficulty: ${difficulty}
 ${timeLimit ? `- Target time: ${timeLimit} minutes (CRITICAL: Question must be completable within this time. This is a hard constraint - adjust complexity accordingly.)` : ''}
 ${points ? `- Point value: ${points}` : ''}
@@ -518,12 +649,13 @@ IMPORTANT:
   * If the question is based on content from a PDF file, use that PDF file in sources. If from a PPTX file, use that PPTX file.
 - For ${taskType}: ${moduleGuidance}
 - The "question" field should contain plain text with proper formatting. Use markdown syntax (e.g., **bold**, *italic*, lists) but DO NOT wrap the entire question in code fences unless it's actually code. Only actual code snippets should be in code blocks.
-- CRITICAL FOR MULTIPLE CHOICE: If questionType is "multiple_choice", you MUST include an "options" array with exactly 4 options, a "correct_answer" field containing only A, B, C, or D, a matching "correct_option_text", and an "explanation".
+- When the QUESTION SHAPE above lists explicit markdown headings (e.g., "## Task", "## Passage", "## Scenario"), follow that exact heading set instead of using a single long paragraph.
+- CRITICAL FOR MULTIPLE CHOICE: If the effective question type is "multiple_choice", you MUST include an "options" array with exactly 4 options, a "correct_answer" field containing only A, B, C, or D, a matching "correct_option_text", and an "explanation".
 - CRITICAL FOR MULTIPLE CHOICE: Each option string must contain only the option text itself. Do NOT include prefixes like "A)", "B)", or "Option C" inside the option strings. The UI will label them.
 - CRITICAL FOR MULTIPLE CHOICE: The "question" field should contain ONLY the question stem—do NOT embed the options inside the question text.
-- CRITICAL FOR DEBUGGING: If questionType is "debugging", define expected behavior before showing faulty code. Only label something as a bug if it violates that stated behavior. Do NOT treat design preferences, API redesign choices, or coding style as bugs.
-- CRITICAL FOR CODING: If questionType is "coding", define the function or program contract explicitly, including inputs, outputs, and invalid-case behavior whenever relevant.
-- CRITICAL FOR FILL IN THE BLANK: If questionType is "fill_in_blank", ensure the blank has one canonical answer or one tightly controlled accepted set. Do NOT create a multi-answer blank.
+- CRITICAL FOR DEBUGGING: If the effective question type is "debugging", define expected behavior before showing faulty code. Only label something as a bug if it violates that stated behavior. Do NOT treat design preferences, API redesign choices, or coding style as bugs.
+- CRITICAL FOR CODING: If the effective question type is "coding", define the function or program contract explicitly, including inputs, outputs, and invalid-case behavior whenever relevant.
+- CRITICAL FOR FILL IN THE BLANK: If the effective question type is "fill_in_blank", ensure the blank has one canonical answer or one tightly controlled accepted set. Do NOT create a multi-answer blank.
 - CRITICAL FOR TRACE/CALCULATION/PROOF/DERIVATION: state enough givens, assumptions, targets, or starting conditions that a strong student does not need to guess hidden rules.
 - CRITICAL FOR LABS: state the concrete deliverable/output students must produce, and include at least 3 objective acceptance requirements when the task is coding, debugging, design, or another hands-on activity.
 - CRITICAL FOR DRILLS: keep one main objective only. Avoid hidden sub-parts, vague deliverables, or multi-stage tasks that exceed quick in-class practice.
@@ -557,7 +689,7 @@ ${userAddon}
 
 EXAMPLE: If context discusses "Arithmetic Operators" with examples like "5 + 2 = 7", your question should be about arithmetic operators, NOT about loops or functions.
 
-Generate ONE ${questionType} question now based EXCLUSIVELY on the provided source material. Return ONLY valid JSON.`
+Generate ONE ${effectiveQuestionType} question now based EXCLUSIVELY on the provided source material. Return ONLY valid JSON.`
         }
       ];
 
@@ -565,13 +697,34 @@ Generate ONE ${questionType} question now based EXCLUSIVELY on the provided sour
         pdfFileData: pdfFileData || undefined,
         pdfFilename: pdfFilename || undefined,
       });
-      const normalizedContent = normalizeQuestionPayload(content, questionType);
+      const normalizedContent = normalizeQuestionPayload(content, effectiveQuestionType);
+
+      if (normalizedContent?.question) {
+        normalizedContent.question = runFormatQuestionScript(skillPack.subjectId, {
+          questionText: normalizedContent.question,
+          questionType: effectiveQuestionType,
+          metadata: normalizedContent.metadata,
+        });
+      }
+
+      if (!normalizedContent.metadata || typeof normalizedContent.metadata !== 'object') {
+        normalizedContent.metadata = {};
+      }
+      normalizedContent.type = effectiveQuestionType;
+      normalizedContent.metadata.subject_skill_id = skillPack.subjectId;
+      normalizedContent.metadata.subject_skill_references = skillPack.routing.referenceFiles;
+      normalizedContent.metadata.subject_routing_rationale = skillPack.routing.rationale;
+      normalizedContent.metadata.original_requested_type = requestedQuestionType;
+      normalizedContent.metadata.effective_question_type = effectiveQuestionType;
+      normalizedContent.metadata.strict_type_enforcement = strictTypeEnforcement;
+      normalizedContent.metadata.debug_allow_fallback = debugAllowFallback;
 
       this.log('info', `Question generated successfully`);
       
-      return this.success(normalizedContent, tokensUsed, {
-        questionType,
+      return this.success(normalizedContent, (tokensUsed || 0) + routingTokens, {
+        questionType: effectiveQuestionType,
         taskType,
+        subjectSkillId: skillPack.subjectId,
       });
 
     } catch (error: any) {

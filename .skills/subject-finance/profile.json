@@ -1,0 +1,77 @@
+{
+  "id": "finance",
+  "label": "Finance & Accounting",
+  "aliases": [
+    "finance",
+    "accounting",
+    "corporate finance",
+    "investments",
+    "valuation",
+    "dcf",
+    "npv",
+    "irr",
+    "wacc",
+    "capm",
+    "derivatives",
+    "options",
+    "futures",
+    "portfolio",
+    "asset pricing",
+    "financial statements",
+    "managerial accounting",
+    "economics",
+    "microeconomics",
+    "macroeconomics",
+    "banking",
+    "fintech"
+  ],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "calculation",
+    "case_study",
+    "data_analysis",
+    "design"
+  ],
+  "preferredQuestionTypes": [
+    "case_study",
+    "calculation",
+    "data_analysis",
+    "multiple_choice"
+  ],
+  "sectionLabels": [
+    "Scenario",
+    "Given Data",
+    "Assumptions",
+    "Required",
+    "Question",
+    "Decision Point",
+    "Formula",
+    "Analysis Lens",
+    "Computation",
+    "Inputs",
+    "Output"
+  ],
+  "questionShapes": {
+    "calculation": "QUESTION SHAPE (Finance / calculation):\n- Output: ## Scenario, ## Given Data, ## Assumptions, ## Required.\n- ## Given Data: bullet list with units and currency (e.g., '- Initial investment: USD 1,200,000 at t=0').\n- ## Assumptions: anything not directly stated but needed (discount rate, tax rate).\n- ## Required: exactly what to compute and the answer form (currency, percent, ratio with rounding).",
+    "case_study": "QUESTION SHAPE (Finance / case study):\n- Output: ## Scenario, ## Given Data, ## Decision Point, ## Analysis Lens, ## Required.\n- ## Scenario: 3-6 sentence narrative of the firm/market situation.\n- ## Decision Point: the explicit choice the student must evaluate (e.g., 'Accept project A vs project B').\n- ## Analysis Lens: whose perspective (shareholder / creditor / manager / regulator).\n- ## Required: name the deliverable (recommendation, NPV comparison, sensitivity table).",
+    "data_analysis": "QUESTION SHAPE (Finance / data analysis):\n- Output: ## Scenario, ## Given Data (use a markdown table for multi-row data), ## Required.\n- ## Given Data: render any income statement / ratio table as a markdown table.\n- ## Required: ask the student to describe, compare, infer, or recommend — pick exactly one.",
+    "multiple_choice": "QUESTION SHAPE (Finance / multiple_choice):\n- Put only the stem in the question field.\n- All 4 options in options array.\n- When the stem involves numbers, restate units and currency inside the stem."
+  },
+  "formatting": {
+    "codeLanguage": null,
+    "preferCodeFences": false,
+    "exampleStyle": "tabular",
+    "wrapExampleInCode": false,
+    "useMarkdownTables": true,
+    "currencyRequired": true
+  },
+  "promptAddendum": "You are generating questions for a finance / accounting course. State every number, time period, currency, and assumption explicitly. Distinguish positive (descriptive) from normative (recommendation) questions. Never assume formulas the student has not been given in the source material. Use markdown tables for any multi-row dataset. NEVER use code fences (```...```) — finance content is not code.",
+  "structuredExamples": [
+    {
+      "type": "calculation",
+      "question": "## Scenario\nA manufacturer is evaluating a 3-year equipment upgrade.\n\n## Given Data\n- Initial outlay: USD 800,000 at t=0\n- After-tax operating cash flows: USD 350,000 per year for t=1..3\n- Salvage value: USD 100,000 at t=3\n\n## Assumptions\n- Discount rate (WACC): 10% per year\n- All cash flows occur at year-end\n\n## Required\nCompute the project's NPV in USD, rounded to the nearest dollar."
+    }
+  ]
+}

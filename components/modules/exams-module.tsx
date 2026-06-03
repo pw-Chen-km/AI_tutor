@@ -11,7 +11,14 @@ import { Sparkles, Copy, Check, Loader2, PieChart, RotateCcw } from 'lucide-reac
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import { defaultWeights, getSubjectConfig, getExamTypes, weightsToCounts } from '@/lib/subjects';
+import {
+    defaultWeights,
+    getSubjectConfig,
+    getExamTypes,
+    hasCompletedSubjectDetectionForContextFiles,
+    resolveDetectedUiSubjectFromContextFiles,
+    weightsToCounts,
+} from '@/lib/subjects';
 import { ensureMarkdownCodeFences, wrapSolutionAsCodeIfCoding } from '@/lib/llm/format';
 import { CodeBlock } from '@/components/shared/code-block';
 import { MixedContent } from '@/components/shared/mixed-content';
@@ -89,6 +96,7 @@ export function ExamsModule() {
     const [totalScore, setTotalScore] = useState(100);
     const [numberOfQuestions, setNumberOfQuestions] = useState(10);
     const [minutesPerQuestion, setMinutesPerQuestion] = useState(5);
+    const [debugAllowFallback, setDebugAllowFallback] = useState<boolean>(false);
     const [selectedChapters, setSelectedChapters] = useState<string[]>([]);
 
     const exam = generatedContent.exams[0] as Exam | undefined;
@@ -108,9 +116,21 @@ export function ExamsModule() {
     const primaryLanguage = languageConfig?.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
     const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
-    const subjectConfig = useMemo(() => getSubjectConfig(subject), [subject]);
-    const examTypes = useMemo(() => getExamTypes(subject, customQuestionTypes?.exams), [subject, customQuestionTypes?.exams]);
-    const [typeWeights, setTypeWeights] = useState<Record<string, number>>(() => defaultWeights(examTypes));
+    const detectedSubject = useMemo(() => resolveDetectedUiSubjectFromContextFiles(contextFiles), [contextFiles]);
+    const subjectDetectionDone = useMemo(
+        () => hasCompletedSubjectDetectionForContextFiles(contextFiles),
+        [contextFiles]
+    );
+    const subjectReady = contextFiles.length > 0 && subjectDetectionDone;
+    const effectiveSubject = subjectReady ? (detectedSubject || subject) : subject;
+    const subjectConfig = useMemo(() => getSubjectConfig(effectiveSubject), [effectiveSubject]);
+    const examTypes = useMemo(
+        () => (subjectReady ? getExamTypes(effectiveSubject, customQuestionTypes?.exams) : []),
+        [subjectReady, effectiveSubject, customQuestionTypes?.exams]
+    );
+    const [typeCounts, setTypeCounts] = useState<Record<string, number>>(() =>
+        weightsToCounts(numberOfQuestions, defaultWeights(examTypes))
+    );
 
     // Variant helpers
     const getItemId = (index: number) => `exams-${index + 1}`;
@@ -224,10 +244,12 @@ export function ExamsModule() {
     };
 
     useEffect(() => {
-        setTypeWeights(defaultWeights(examTypes));
-    }, [examTypes]);
-
-    const typeCounts = useMemo(() => weightsToCounts(numberOfQuestions, typeWeights), [numberOfQuestions, typeWeights]);
+        setTypeCounts(weightsToCounts(numberOfQuestions, defaultWeights(examTypes)));
+    }, [examTypes, numberOfQuestions]);
+    const unassignedTypeCount = useMemo(() => {
+        const assigned = Object.values(typeCounts).reduce((sum, count) => sum + Math.max(0, Number(count) || 0), 0);
+        return Math.max(0, numberOfQuestions - assigned);
+    }, [typeCounts, numberOfQuestions]);
 
     // Build export items using selected variants (not just original questions)
     const exportItems: ExportItem[] = useMemo(() => {
@@ -294,6 +316,7 @@ export function ExamsModule() {
                         availableFiles: contextFiles.map((f) => f.name),
                         selectedChapters: selectedChapters.length > 0 ? selectedChapters : undefined,
                         sourceDocuments,
+                        debugAllowFallback,
                     },
                     llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
@@ -525,7 +548,7 @@ export function ExamsModule() {
                         />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-3 gap-4">
                         <div>
                             <Label htmlFor="num-questions">Number of Questions</Label>
                             <Input
@@ -550,17 +573,33 @@ export function ExamsModule() {
                                 onChange={(e) => setMinutesPerQuestion(Math.max(1, Math.min(180, Number(e.target.value) || 1)))}
                             />
                         </div>
+                        <div>
+                            <Label htmlFor="exams-debug-fallback">Debug: Allow Fallback</Label>
+                            <div className="h-10 flex items-center">
+                                <input
+                                    id="exams-debug-fallback"
+                                    type="checkbox"
+                                    checked={debugAllowFallback}
+                                    onChange={(e) => setDebugAllowFallback(e.target.checked)}
+                                />
+                            </div>
+                        </div>
                     </div>
 
-                    <QuestionTypeMix
-                        title="Question Type Mix"
-                        subjectLabel={subjectConfig.label}
-                        types={examTypes}
-                        total={numberOfQuestions}
-                        weights={typeWeights}
-                        counts={typeCounts}
-                        onChange={setTypeWeights}
-                    />
+                    {subjectReady ? (
+                        <QuestionTypeMix
+                            title="Question Type Mix"
+                            subjectLabel={subjectConfig.label}
+                            types={examTypes}
+                            total={numberOfQuestions}
+                            counts={typeCounts}
+                            onChange={setTypeCounts}
+                        />
+                    ) : (
+                        <p className="text-sm text-slate-500">
+                            Detecting subject from uploaded materials. Question types will appear after detection.
+                        </p>
+                    )}
 
                     <div>
                         <h4 className="text-sm font-medium mb-2">Chapter Selection (Optional)</h4>
@@ -588,7 +627,7 @@ export function ExamsModule() {
 
                     <Button
                         onClick={handleGenerate}
-                        disabled={loading || contextFiles.length === 0}
+                        disabled={loading || contextFiles.length === 0 || !subjectReady || unassignedTypeCount !== 0}
                         size="lg"
                         className="w-full"
                     >
@@ -623,6 +662,16 @@ export function ExamsModule() {
                     {contextFiles.length === 0 && (
                         <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
                             ⚠️ Please upload course materials first
+                        </p>
+                    )}
+                    {contextFiles.length > 0 && !subjectReady && (
+                        <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+                            ⚠️ Please wait for subject detection before assigning question types
+                        </p>
+                    )}
+                    {unassignedTypeCount > 0 && (
+                        <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+                            ⚠️ Please assign all questions. Remaining: {unassignedTypeCount}
                         </p>
                     )}
                 </CardContent>
@@ -867,6 +916,7 @@ export function ExamsModule() {
                                                                     subject,
                                                                     availableFiles: contextFiles.map((f) => f.name),
                                                                     sourceDocuments,
+                                                                    debugAllowFallback,
                                                                 },
                                                             llmConfig: activeLLMConfig,
                                                                 languageConfig: {
@@ -956,6 +1006,7 @@ export function ExamsModule() {
                                                                                 minutesPerQuestion,
                                                                                 subject,
                                                                                 sourceDocuments,
+                                                                                debugAllowFallback,
                                                                             },
                                                             llmConfig: activeLLMConfig,
                                                                             languageConfig: {
@@ -1039,7 +1090,7 @@ export function ExamsModule() {
                                                 availableFiles={contextFiles}
                                                 currentSources={question.sources}
                                                 isLoading={regenerating[index]}
-                                                questionTypes={customQuestionTypes.exams || []}
+                                                questionTypes={examTypes.map((type) => type.id)}
                                                 currentQuestionType={question.type}
                                                 onRegenerate={async (selectedFile, selectedPages, selectedQuestionType) => {
                                                     setRegenerating((s) => ({ ...s, [index]: true }));
@@ -1065,6 +1116,7 @@ export function ExamsModule() {
                                                                     selectedPages,
                                                                     availableFiles: [selectedFile],
                                                                     sourceDocuments,
+                                                                    debugAllowFallback,
                                                                 },
                                                                 llmConfig: activeLLMConfig,
                                                                 languageConfig: {

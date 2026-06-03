@@ -21,7 +21,14 @@ import { QuestionTypeMix } from '@/components/shared/question-type-mix';
 import { ExportPanel, type ExportItem } from '@/components/shared/export-panel';
 import { CodeBlock } from '@/components/shared/code-block';
 import { MixedContent } from '@/components/shared/mixed-content';
-import { defaultWeights, getDrillsTypes, getSubjectConfig, weightsToCounts } from '@/lib/subjects';
+import {
+  defaultWeights,
+  getDrillsTypes,
+  getSubjectConfig,
+  hasCompletedSubjectDetectionForContextFiles,
+  resolveDetectedUiSubjectFromContextFiles,
+  weightsToCounts,
+} from '@/lib/subjects';
 import { ensureMarkdownCodeFences, wrapSolutionAsCodeIfCoding } from '@/lib/llm/format';
 import { getActiveLLMConfig } from '@/lib/llm/config';
 
@@ -58,11 +65,29 @@ export function DrillsModuleV2() {
   const primaryLanguage = languageConfig.primaryLanguage;
   const secondaryLanguage = languageConfig.secondaryLanguage;
   const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
-  const subjectConfig = getSubjectConfig(subject);
-  const drillsTypes = useMemo(() => getDrillsTypes(subject, customQuestionTypes?.drills), [subject, customQuestionTypes?.drills]);
+  const detectedSubject = useMemo(() => resolveDetectedUiSubjectFromContextFiles(contextFiles), [contextFiles]);
+  const subjectDetectionDone = useMemo(
+    () => hasCompletedSubjectDetectionForContextFiles(contextFiles),
+    [contextFiles]
+  );
+  const subjectReady = contextFiles.length > 0 && subjectDetectionDone;
+  const effectiveSubject = subjectReady ? (detectedSubject || subject) : subject;
+  const subjectConfig = useMemo(() => getSubjectConfig(effectiveSubject), [effectiveSubject]);
+  const drillsTypes = useMemo(
+    () => (subjectReady ? getDrillsTypes(effectiveSubject, customQuestionTypes?.drills) : []),
+    [subjectReady, effectiveSubject, customQuestionTypes?.drills]
+  );
   
-  const [typeWeights, setTypeWeights] = useState(defaultWeights(drillsTypes));
-  const typeCounts = useMemo(() => weightsToCounts(numberOfQuestions, typeWeights), [numberOfQuestions, typeWeights]);
+  const [typeCounts, setTypeCounts] = useState<Record<string, number>>(() =>
+    weightsToCounts(numberOfQuestions, defaultWeights(drillsTypes))
+  );
+  useEffect(() => {
+    setTypeCounts(weightsToCounts(numberOfQuestions, defaultWeights(drillsTypes)));
+  }, [drillsTypes, numberOfQuestions]);
+  const unassignedTypeCount = useMemo(() => {
+    const assigned = Object.values(typeCounts).reduce((sum, count) => sum + Math.max(0, Number(count) || 0), 0);
+    return Math.max(0, numberOfQuestions - assigned);
+  }, [typeCounts, numberOfQuestions]);
 
   const drills = Array.isArray(generatedContent.drills) ? generatedContent.drills : [];
   const safeDrills = drills.filter((d) => d && typeof d === 'object');
@@ -311,20 +336,25 @@ export function DrillsModuleV2() {
           </div>
 
           <div className="mb-4">
-            <QuestionTypeMix
-              title="Question Type Mix"
-              subjectLabel={subjectConfig.label}
-              types={drillsTypes}
-              total={numberOfQuestions}
-              weights={typeWeights}
-              counts={typeCounts}
-              onChange={setTypeWeights}
-            />
+            {subjectReady ? (
+              <QuestionTypeMix
+                title="Question Type Mix"
+                subjectLabel={subjectConfig.label}
+                types={drillsTypes}
+                total={numberOfQuestions}
+                counts={typeCounts}
+                onChange={setTypeCounts}
+              />
+            ) : (
+              <p className="text-sm text-slate-500">
+                Detecting subject from uploaded materials. Question types will appear after detection.
+              </p>
+            )}
           </div>
 
           <Button
             onClick={handleGenerate}
-            disabled={loading || contextFiles.length === 0}
+            disabled={loading || contextFiles.length === 0 || !subjectReady || unassignedTypeCount !== 0}
             className="w-full sm:w-auto"
             size="lg"
           >
@@ -343,6 +373,16 @@ export function DrillsModuleV2() {
           {contextFiles.length === 0 && (
             <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
               ⚠️ Please upload course materials first
+            </p>
+          )}
+          {contextFiles.length > 0 && !subjectReady && (
+            <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+              ⚠️ Please wait for subject detection before assigning question types
+            </p>
+          )}
+          {unassignedTypeCount > 0 && (
+            <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+              ⚠️ Please assign all questions. Remaining: {unassignedTypeCount}
             </p>
           )}
         </CardContent>

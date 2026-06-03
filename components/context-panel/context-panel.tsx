@@ -8,23 +8,6 @@ import { Upload, File, X, FileText, FileSpreadsheet, FolderOpen, Globe, Graduati
 import { useCallback, useState, useEffect } from 'react';
 import { parseFileDetailed, parseFileForEvaluation } from '@/lib/parsers/file-parser';
 
-const RAW_FILE_API_LIMIT_BYTES = 3 * 1024 * 1024;
-
-function formatBytes(bytes: number): string {
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
-}
-
-function assertApiFileSize(file: File, action: string) {
-    if (file.size <= RAW_FILE_API_LIMIT_BYTES) return;
-    throw new Error(
-        [
-            `檔案「${file.name}」大小為 ${formatBytes(file.size)}，超過目前線上 ${action} 可處理上限 ${formatBytes(RAW_FILE_API_LIMIT_BYTES)}。`,
-            '請先壓縮檔案、拆成較小檔案，或只保留需要使用的頁面後再上傳。',
-        ].join('\n')
-    );
-}
-
 // File upload zone component
 function FileUploadZone({
     id,
@@ -200,6 +183,10 @@ function FileUploadZone({
 export function ContextPanel() {
     const { 
         activeModule,
+        llmConfig,
+        languageConfig,
+        subject,
+        setSubject,
         contextFiles, addContextFile, removeContextFile, clearContextFiles, 
         teacherFiles, addTeacherFile, removeTeacherFile, clearTeacherFiles,
         studentFiles, addStudentFile, removeStudentFile, clearStudentFiles,
@@ -258,6 +245,88 @@ export function ContextPanel() {
         return btoa(binary);
     };
 
+    const refineOutlineForUpload = useCallback(async (params: {
+        fileName: string;
+        fileType: string;
+        intake: NonNullable<ContextFile['intake']>;
+    }) => {
+        const fileType = params.fileType.toLowerCase();
+        if (!['pdf', 'pptx'].includes(fileType)) return null;
+
+        try {
+            const response = await fetch('/api/refine-outline', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    fileName: params.fileName,
+                    fileType,
+                    intake: params.intake,
+                    llmConfig,
+                    languageConfig,
+                    subject,
+                }),
+            });
+
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data?.error || `Outline refinement failed (${response.status})`);
+            }
+            return data;
+        } catch (error: any) {
+            console.warn(`Upload-time outline refinement skipped for ${params.fileName}:`, error?.message || error);
+            return {
+                outlineError: error?.message || 'Outline refinement failed',
+                outlineSource: 'upload_refine_failed',
+            };
+        }
+    }, [languageConfig, llmConfig, subject]);
+
+    const mapSkillSubjectToUiSubject = useCallback((skillSubjectId: string): string => {
+        const normalized = String(skillSubjectId || '').trim().toLowerCase();
+        const map: Record<string, string> = {
+            'computer-science': 'computer_science',
+            language: 'english_literature',
+            civics: 'political_science',
+            default: 'customized',
+        };
+        return map[normalized] || normalized.replace(/-/g, '_');
+    }, []);
+
+    const detectSubjectForUpload = useCallback(async (params: {
+        fileName: string;
+        fileType: string;
+        intake: NonNullable<ContextFile['intake']>;
+    }) => {
+        try {
+            const response = await fetch('/api/detect-subject', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    fileName: params.fileName,
+                    fileType: params.fileType,
+                    intake: params.intake,
+                    llmConfig,
+                    languageConfig,
+                    subjectHint: subject,
+                }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data?.error || `Subject detection failed (${response.status})`);
+            }
+            return data;
+        } catch (error: any) {
+            console.warn(`Upload-time subject detection skipped for ${params.fileName}:`, error?.message || error);
+            return {
+                subjectId: 'default',
+                confidence: 0,
+                source: 'fallback',
+                reason: error?.message || 'Subject detection failed',
+                candidateScores: [],
+            };
+        }
+    }, [languageConfig, llmConfig, subject]);
+
     // Standard file upload handler (for other modules)
     const handleFileUpload = useCallback(async (files: FileList | null) => {
         if (!files || files.length === 0) return;
@@ -265,6 +334,7 @@ export function ContextPanel() {
         setUploading(true);
         try {
             const rejected: string[] = [];
+            const detectedSubjects: Array<{ subjectId: string; confidence: number }> = [];
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
                 const ext = file.name.split('.').pop()?.toLowerCase() || '';
@@ -272,12 +342,55 @@ export function ContextPanel() {
                     rejected.push(file.name);
                     continue;
                 }
-                if (ext === 'pptx' || ext === 'pdf') {
-                    assertApiFileSize(file, 'PDF/PPTX 上傳與生成');
-                }
                 const rawBase64 = (ext === 'pptx' || ext === 'pdf') ? arrayBufferToBase64(await file.arrayBuffer()) : undefined;
                 const intakeIntent = isLectureRehearsal ? 'read_for_script_generation' : 'generic';
-                const parsed = await parseFileDetailed(file, intakeIntent);
+                const parsed = await parseFileDetailed(file, intakeIntent, { llmConfig });
+                const intake = {
+                    fileName: parsed.fileName || file.name,
+                    fileType: parsed.fileType || ext || file.type || 'unknown',
+                    intent: parsed.intent || intakeIntent,
+                    content: parsed.content,
+                    strategy: parsed.strategy,
+                    pages: parsed.pages,
+                    warnings: parsed.warnings,
+                    metadata: parsed.metadata || {},
+                };
+                const outlineResult = await refineOutlineForUpload({
+                    fileName: intake.fileName,
+                    fileType: intake.fileType,
+                    intake,
+                });
+                const outlineMetadata = outlineResult
+                    ? {
+                        roughOutline: outlineResult.roughOutline,
+                        refinedOutline: outlineResult.refinedOutline,
+                        outlineSource: outlineResult.outlineSource,
+                        outlineGeneratedAt: outlineResult.generatedAt,
+                        outlineTokensUsed: outlineResult.tokensUsed,
+                        outlineError: outlineResult.outlineError,
+                    }
+                    : {};
+                const detectionResult = await detectSubjectForUpload({
+                    fileName: intake.fileName,
+                    fileType: intake.fileType,
+                    intake: {
+                        ...intake,
+                        metadata: {
+                            ...(intake.metadata || {}),
+                            ...outlineMetadata,
+                        },
+                    },
+                });
+                const detectionMetadata = detectionResult
+                    ? {
+                        detectedSubjectId: detectionResult.subjectId,
+                        detectedSubjectConfidence: detectionResult.confidence,
+                        detectedSubjectSource: detectionResult.source,
+                        detectedSubjectReason: detectionResult.reason,
+                        detectedSubjectCandidateScores: detectionResult.candidateScores,
+                        detectedSubjectAt: detectionResult.detectedAt || new Date().toISOString(),
+                    }
+                    : {};
 
                 addContextFile({
                     id: Math.random().toString(36).substring(7),
@@ -285,18 +398,34 @@ export function ContextPanel() {
                     type: file.type || file.name.split('.').pop() || 'unknown',
                     content: parsed.content,
                     intake: {
-                        fileName: parsed.fileName || file.name,
-                        fileType: parsed.fileType || ext || file.type || 'unknown',
-                        intent: parsed.intent || intakeIntent,
-                        content: parsed.content,
-                        strategy: parsed.strategy,
-                        pages: parsed.pages,
-                        warnings: parsed.warnings,
-                        metadata: parsed.metadata,
+                        ...intake,
+                        metadata: {
+                            ...(intake.metadata || {}),
+                            ...outlineMetadata,
+                            ...detectionMetadata,
+                        },
                     },
                     rawBase64,
                     uploadedAt: new Date(),
                 });
+                if (typeof detectionResult?.subjectId === 'string') {
+                    detectedSubjects.push({
+                        subjectId: detectionResult.subjectId,
+                        confidence: Number(detectionResult.confidence || 0),
+                    });
+                }
+            }
+            // Auto-align global subject after upload when signal is strong and consistent.
+            if (detectedSubjects.length > 0) {
+                const highConfidence = detectedSubjects
+                    .filter((d) => d.subjectId && d.subjectId !== 'default' && d.confidence >= 0.6);
+                const unique = [...new Set(highConfidence.map((d) => d.subjectId))];
+                if (unique.length === 1) {
+                    const mapped = mapSkillSubjectToUiSubject(unique[0]);
+                    if (mapped && mapped !== subject) {
+                        setSubject(mapped);
+                    }
+                }
             }
             if (rejected.length > 0) {
                 alert(`Unsupported file type for Lecture Rehearsal: ${rejected.join(', ')}`);
@@ -308,7 +437,7 @@ export function ContextPanel() {
         } finally {
             setUploading(false);
         }
-    }, [addContextFile, isLectureRehearsal]);
+    }, [addContextFile, detectSubjectForUpload, isLectureRehearsal, llmConfig, mapSkillSubjectToUiSubject, refineOutlineForUpload, setSubject, subject]);
 
     const handleAddWebUrl = useCallback(async () => {
         const url = webUrlInput.trim();
@@ -351,8 +480,7 @@ export function ContextPanel() {
         try {
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
-                assertApiFileSize(file, '考卷批改');
-                const content = await parseFileForEvaluation(file);
+                const content = await parseFileForEvaluation(file, { llmConfig });
                 const rawBase64 = arrayBufferToBase64(await file.arrayBuffer());
 
                 addTeacherFile({
@@ -368,7 +496,7 @@ export function ContextPanel() {
             console.error('Error uploading teacher files:', error);
             alert(`Error uploading file: ${error?.message || 'Unknown error'}`);
         }
-    }, [addTeacherFile]);
+    }, [addTeacherFile, llmConfig]);
 
     // Student file upload handler (for Exam Evaluation)
     const handleStudentFileUpload = useCallback(async (files: FileList | null) => {
@@ -382,7 +510,6 @@ export function ContextPanel() {
 
                 // Check if it's a ZIP or RAR archive
                 if (fileType === 'zip' || fileType === 'rar') {
-                    assertApiFileSize(file, '壓縮檔解壓縮');
                     // Extract archive and add each file as a separate student
                     const formData = new FormData();
                     formData.append('file', file);
@@ -450,8 +577,7 @@ export function ContextPanel() {
                     }
                 } else {
                     // Regular file - process normally
-                    assertApiFileSize(file, '考卷批改');
-                    const content = await parseFileForEvaluation(file);
+                    const content = await parseFileForEvaluation(file, { llmConfig });
                     const rawBase64 = arrayBufferToBase64(await file.arrayBuffer());
 
                     addStudentFile({
@@ -470,7 +596,7 @@ export function ContextPanel() {
         } finally {
             setUploading(false);
         }
-    }, [addStudentFile]);
+    }, [addStudentFile, llmConfig]);
 
     const handleDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();

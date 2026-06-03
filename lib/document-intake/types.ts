@@ -25,9 +25,16 @@ export type DocumentIntakeResult = {
   metadata: Record<string, any>;
 };
 
+export type DocumentIntakeLLMConfig = {
+  provider?: string;
+  apiKey?: string;
+  baseURL?: string;
+  model?: string;
+};
+
 export type DocumentIntakeInput = {
   fileName: string;
   buffer: Buffer;
   intent?: DocumentIntakeIntent;
+  llmConfig?: DocumentIntakeLLMConfig;
 };
-

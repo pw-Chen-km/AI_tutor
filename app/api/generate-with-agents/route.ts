@@ -197,6 +197,27 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const detectSubjectFromTaskParams = () => {
+      const sourceDocuments = Array.isArray(taskParams?.sourceDocuments) ? taskParams.sourceDocuments : [];
+      const candidates = sourceDocuments
+        .map((doc: any) => ({
+          id: String(doc?.intake?.metadata?.detectedSubjectId || '').trim().toLowerCase(),
+          confidence: Number(doc?.intake?.metadata?.detectedSubjectConfidence || 0),
+        }))
+        .filter((d: any) => d.id);
+      const high = candidates.filter((d: any) => d.id !== 'default' && d.confidence >= 0.6);
+      if (high.length === 0) return '';
+      const counts = new Map<string, { n: number; maxConfidence: number }>();
+      for (const item of high) {
+        const prev = counts.get(item.id) || { n: 0, maxConfidence: 0 };
+        counts.set(item.id, { n: prev.n + 1, maxConfidence: Math.max(prev.maxConfidence, item.confidence) });
+      }
+      const winner = [...counts.entries()].sort((a, b) => (b[1].n - a[1].n) || (b[1].maxConfidence - a[1].maxConfidence))[0];
+      return winner?.[0] || '';
+    };
+    const detectedSubject = detectSubjectFromTaskParams();
+    const effectiveSubject = detectedSubject || subject || 'computer_science';
+
     // Build skill context with web sources
     const skillContext = {
       llmConfig: {
@@ -209,7 +230,7 @@ export async function POST(req: NextRequest) {
         primaryLanguage: languageConfig?.primaryLanguage || 'English',
         secondaryLanguage: languageConfig?.secondaryLanguage || 'none',
       },
-      subject: subject || 'computer_science',
+      subject: effectiveSubject,
       additionalParams: {
         ...taskParams,
         webSources: webSources.length > 0 ? webSources : undefined, // Pass web sources to skills

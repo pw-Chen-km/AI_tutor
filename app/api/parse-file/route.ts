@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { intakeDocument } from '@/lib/document-intake';
+import { getActiveLLMConfig } from '@/lib/llm/config';
 import type { DocumentIntakeIntent } from '@/lib/document-intake/types';
+
+export const runtime = 'nodejs';
+export const maxDuration = 120;
 
 const SUPPORTED_INTENTS = new Set<DocumentIntakeIntent>([
     'read_for_question_generation',
@@ -14,6 +18,16 @@ const SUPPORTED_INTENTS = new Set<DocumentIntakeIntent>([
 function parseIntent(value: FormDataEntryValue | null): DocumentIntakeIntent {
     const intent = typeof value === 'string' ? value : 'generic';
     return SUPPORTED_INTENTS.has(intent as DocumentIntakeIntent) ? (intent as DocumentIntakeIntent) : 'generic';
+}
+
+function parseJsonField(value: FormDataEntryValue | null): Record<string, any> | undefined {
+    if (typeof value !== 'string' || !value.trim()) return undefined;
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 export async function POST(req: NextRequest) {
@@ -33,6 +47,16 @@ export async function POST(req: NextRequest) {
 
         const file = formData.get('file') as File;
         const intent = parseIntent(formData.get('intent'));
+        const rawLLMConfig = parseJsonField(formData.get('llmConfig'));
+        const activeLLMConfig = getActiveLLMConfig(rawLLMConfig);
+        const ocrLLMConfig = activeLLMConfig.apiKey
+            ? {
+                provider: activeLLMConfig.provider,
+                apiKey: activeLLMConfig.apiKey,
+                baseURL: activeLLMConfig.baseURL,
+                model: activeLLMConfig.model,
+            }
+            : undefined;
 
         if (!file) {
             console.error('No file in form data');
@@ -82,6 +106,7 @@ export async function POST(req: NextRequest) {
                         fileName: file.name,
                         buffer,
                         intent,
+                        llmConfig: ocrLLMConfig,
                     });
                     console.log(
                         `Successfully parsed ${file.name}, strategy: ${result.strategy}, length: ${result.content.length}`

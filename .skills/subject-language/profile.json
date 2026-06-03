@@ -1,0 +1,101 @@
+{
+  "id": "language",
+  "label": "Language Studies",
+  "aliases": [
+    "language",
+    "english",
+    "chinese",
+    "japanese",
+    "korean",
+    "spanish",
+    "french",
+    "german",
+    "literature",
+    "linguistics",
+    "grammar",
+    "vocabulary",
+    "translation",
+    "composition",
+    "rhetoric",
+    "reading comprehension",
+    "esl",
+    "tesol",
+    "toefl",
+    "ielts",
+    "toeic",
+    "français",
+    "francais",
+    "french grammar",
+    "grammaire",
+    "conjonction",
+    "conjonctions",
+    "préposition",
+    "preposition",
+    "prépositions",
+    "proposition subordonnée",
+    "propositions subordonnées",
+    "subordonnée",
+    "subordonnées",
+    "indicatif",
+    "subjonctif",
+    "infinitif",
+    "syntax",
+    "syntaxe",
+    "mood",
+    "verb mood"
+  ],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "cloze",
+    "reading_comprehension",
+    "translation",
+    "grammar_correction",
+    "essay"
+  ],
+  "preferredQuestionTypes": [
+    "cloze",
+    "reading_comprehension",
+    "multiple_choice",
+    "grammar_correction"
+  ],
+  "sectionLabels": [
+    "Passage",
+    "Context",
+    "Vocabulary",
+    "Grammar Point",
+    "Instructions",
+    "Question",
+    "Choices",
+    "Source Text",
+    "Target Language",
+    "Reading",
+    "Comprehension",
+    "Prompt"
+  ],
+  "questionShapes": {
+    "cloze": "QUESTION SHAPE (Language / cloze):\n- Output: ## Passage, ## Instructions, ## Question.\n- ## Passage: 2-4 sentence quoted excerpt from the source, with one or more blanks marked as '_____'.\n- ## Instructions: one sentence telling the student to fill in the blank with one word (or whatever unit).\n- ## Question: optional — only if multiple blanks need numbering.\n- Never use code fences.",
+    "reading_comprehension": "QUESTION SHAPE (Language / reading comprehension):\n- Output: ## Passage, ## Question, ## Choices (when multiple choice).\n- ## Passage: quote a faithful excerpt from the source.\n- ## Question: a single comprehension question (detail, main idea, inference, vocabulary in context, or tone).\n- ## Choices: 4 options for multiple choice, or omit for short answer.",
+    "translation": "QUESTION SHAPE (Language / translation):\n- Output: ## Source Text, ## Target Language, ## Instructions.\n- ## Source Text: quote the sentence/phrase to translate.\n- ## Target Language: name the language the student must produce.\n- ## Instructions: any constraints (formal/informal register, keep idiom literal, etc.).",
+    "grammar_correction": "QUESTION SHAPE (Language / grammar correction):\n- Output: ## Sentence, ## Grammar Point, ## Instructions.\n- ## Sentence: the ungrammatical sentence in a > block quote.\n- ## Grammar Point: name the rule being tested (e.g., 'subject-verb agreement', '使役動詞').\n- ## Instructions: tell student to rewrite the sentence correctly."
+  },
+  "formatting": {
+    "codeLanguage": null,
+    "preferCodeFences": false,
+    "exampleStyle": "quotation",
+    "wrapExampleInCode": false,
+    "quoteWith": ">"
+  },
+  "promptAddendum": "You are generating questions for a language course. Quote source passages faithfully. Test comprehension, grammar, vocabulary, translation, style, or syntax — not programming, computation, or mathematical derivation. For French grammar material, preserve French terms such as conjonction, préposition, proposition subordonnée, indicatif, subjonctif, and infinitif. Avoid trick questions that depend on cultural assumptions outside the passage. NEVER use code fences for passages — use block quotes (>) instead.",
+  "structuredExamples": [
+    {
+      "type": "cloze",
+      "question": "## Passage\n> Although the experiment was carefully designed, the researchers _____ a crucial control variable, which weakened the validity of their conclusions.\n\n## Instructions\nFill in the blank with a single verb in the past tense."
+    },
+    {
+      "type": "reading_comprehension",
+      "question": "## Passage\n> By the end of the nineteenth century, electricity had transformed urban nightlife: cafés stayed open later, theatres glittered with new fixtures, and entire neighbourhoods reshaped their habits around the constant glow.\n\n## Question\nWhich of the following best captures the author's main point?\n\n## Choices\n- Electricity made theatres more profitable.\n- Electricity reorganized the rhythms of city life.\n- Cafés invented late-night culture.\n- Electric fixtures were unsafe in the nineteenth century."
+    }
+  ]
+}

@@ -32,6 +32,25 @@ function inferDocumentType(fileName: string, explicitType?: string): SupportedDo
   return null;
 }
 
+function getIntakeTextLen(intake: any): number {
+  const pages = Array.isArray(intake?.pages) ? intake.pages : [];
+  return pages.reduce((sum: number, page: any) => sum + Number(page?.textLen || String(page?.text || '').length || 0), 0);
+}
+
+function isBlankPdfFallbackIntake(intake: any, fileType: SupportedDocumentType | null): boolean {
+  if (fileType !== 'pdf' || !intake || !Array.isArray(intake.pages) || intake.pages.length === 0) {
+    return false;
+  }
+  if (getIntakeTextLen(intake) > 0) return false;
+
+  const strategy = String(intake.strategy || '').toLowerCase();
+  const content = String(intake.content || '').toLowerCase();
+  const warnings = Array.isArray(intake.warnings) ? intake.warnings.join('\n').toLowerCase() : '';
+  return strategy.includes('page-count-fallback')
+    || content.includes('pdf text extraction failed')
+    || warnings.includes('pdf text extraction failed');
+}
+
 function buildWindows(pageCount: number, windowSize = 5, overlap = 1) {
   const safeWindowSize = Math.max(1, windowSize);
   const safeOverlap = Math.max(0, Math.min(overlap, safeWindowSize - 1));
@@ -146,7 +165,7 @@ export class DocumentPreprocessorSkill extends BaseSkill {
     optionalInputs: ['fileType', 'fileBase64', 'intake', 'audienceLevel', 'targetMinutes', 'windowSize', 'overlap', 'preferPdfPipeline'],
   };
 
-  async execute(input: SkillInput, _context: SkillContext): Promise<SkillOutput> {
+  async execute(input: SkillInput, context: SkillContext): Promise<SkillOutput> {
     const validation = this.validateInput(input);
     if (!validation.valid) {
       return this.error(validation.error!);
@@ -166,8 +185,15 @@ export class DocumentPreprocessorSkill extends BaseSkill {
       return this.error(`Unsupported document type for file: ${fileName}`);
     }
 
-    const hasReusableIntake = existingIntake && Array.isArray(existingIntake.pages) && existingIntake.pages.length > 0;
+    const hasBlankPdfFallback = isBlankPdfFallbackIntake(existingIntake, fileType);
+    const hasReusableIntake = existingIntake
+      && Array.isArray(existingIntake.pages)
+      && existingIntake.pages.length > 0
+      && !hasBlankPdfFallback;
     if (!hasReusableIntake && !fileBase64) {
+      if (hasBlankPdfFallback) {
+        return this.error(`Existing PDF intake for ${fileName} is blank and raw fileBase64 is unavailable for OCR reprocessing.`);
+      }
       return this.error(`Missing reusable intake or fileBase64 for file: ${fileName}`);
     }
 
@@ -189,6 +215,14 @@ export class DocumentPreprocessorSkill extends BaseSkill {
             fileName,
             buffer: Buffer.from(fileBase64, 'base64'),
             intent: 'read_for_question_generation',
+            llmConfig: context?.llmConfig
+              ? {
+                  provider: context.llmConfig.provider,
+                  apiKey: context.llmConfig.apiKey,
+                  baseURL: context.llmConfig.baseURL,
+                  model: context.llmConfig.model,
+                }
+              : undefined,
           });
 
       let rawPages: Array<any> = intake.pages.map((page: any) => ({
@@ -199,6 +233,9 @@ export class DocumentPreprocessorSkill extends BaseSkill {
       }));
       const parserStrategy = intake.strategy;
       let warnings: string[] = [...(intake.warnings || [])];
+      if (hasBlankPdfFallback) {
+        warnings.push('Existing blank PDF page-count fallback was ignored and the raw PDF was reprocessed.');
+      }
       let normalizedType: SupportedDocumentType = fileType;
 
       if (fileType === 'pptx') {

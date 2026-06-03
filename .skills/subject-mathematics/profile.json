@@ -1,0 +1,89 @@
+{
+  "id": "mathematics",
+  "label": "Mathematics",
+  "aliases": [
+    "mathematics",
+    "math",
+    "maths",
+    "algebra",
+    "geometry",
+    "trigonometry",
+    "calculus",
+    "precalculus",
+    "statistics",
+    "probability",
+    "discrete math",
+    "linear algebra",
+    "differential equations",
+    "number theory",
+    "數學",
+    "代數",
+    "幾何",
+    "微積分",
+    "統計",
+    "機率"
+  ],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "calculation",
+    "proof",
+    "derivation"
+  ],
+  "preferredQuestionTypes": [
+    "calculation",
+    "proof",
+    "multiple_choice",
+    "short_answer"
+  ],
+  "sectionLabels": [
+    "Problem",
+    "Given",
+    "Definitions",
+    "Assumptions",
+    "Required",
+    "Hint",
+    "Work Shown",
+    "Question",
+    "Diagram Description"
+  ],
+  "questionShapes": {
+    "calculation": "QUESTION SHAPE (Mathematics / calculation):\n- Output: ## Problem, ## Given, ## Assumptions, ## Required.\n- ## Given: bullet list of numeric or symbolic givens with units if applicable.\n- ## Assumptions: domain restrictions, rounding rule, which formula set is allowed.\n- ## Required: exact answer form (simplified fraction, decimal places, interval notation).",
+    "proof": "QUESTION SHAPE (Mathematics / proof):\n- Output: ## Problem, ## Definitions, ## Required.\n- ## Problem: the claim to prove or the statement 'Show that …'.\n- ## Definitions: only definitions or lemmas from the source needed for the proof.\n- ## Required: what the student must produce (direct proof, induction, contradiction, ε-δ, etc.).",
+    "derivation": "QUESTION SHAPE (Mathematics / derivation):\n- Output: ## Problem, ## Given, ## Required.\n- ## Problem: name the quantity or formula to derive.\n- ## Given: starting equations or conditions from the source.\n- ## Required: step expectations (e.g., 'justify each limit interchange').",
+    "short_answer": "QUESTION SHAPE (Mathematics / short_answer):\n- Output: ## Problem, ## Given (optional), ## Required.\n- Ask for one concise mathematical explanation or comparison in 1-3 sentences.",
+    "fill_in_blank": "QUESTION SHAPE (Mathematics / fill_in_blank):\n- Output: ## Problem, ## Question.\n- Use one blank only (_____).\n- The blank should have one canonical completion under stated assumptions.",
+    "multiple_choice": "QUESTION SHAPE (Mathematics / multiple_choice):\n- Stem in question field; 4 parallel options in options array.\n- State units and rounding in the stem when numbers appear."
+  },
+  "formatting": {
+    "codeLanguage": null,
+    "preferCodeFences": false,
+    "exampleStyle": "symbolic",
+    "wrapExampleInCode": false,
+    "useLatexInline": true
+  },
+  "promptAddendum": "You are generating questions for a mathematics course. Use this profile only when the source contains mathematical notation, equations, functions, numeric calculation, probability/statistics, proof, or symbolic reasoning. Do not impose calculation/proof/derivation shapes on natural-language grammar, literature, rhetoric, or foreign-language learning material. Use precise notation; state domains, rounding, and units. Proofs must be completable with definitions and theorems from the source material only. Do not use code fences for math — write expressions in plain text or standard notation (e.g., x^2, ∫, Σ). One main skill per question.",
+  "structuredExamples": [
+    {
+      "type": "calculation",
+      "question": "## Problem\nFind all real solutions to a quadratic equation.\n\n## Given\n- Equation: x² − 5x + 6 = 0\n\n## Assumptions\n- Work over the real numbers\n- Give solutions in set notation\n\n## Required\nList all real roots."
+    },
+    {
+      "type": "proof",
+      "question": "## Problem\nProve that the sum of two odd integers is even.\n\n## Definitions\n- An odd integer can be written as 2k + 1 for some integer k.\n\n## Required\nWrite a direct proof using symbolic algebra only."
+    },
+    {
+      "type": "proof",
+      "question": "## Problem\nUse the ε-δ definition to prove that lim_{x->2} (3x - 1) = 5.\n\n## Definitions\n- lim_{x->a} f(x) = L means: for every ε > 0 there exists δ > 0 such that 0 < |x-a| < δ implies |f(x)-L| < ε.\n\n## Required\nProvide an explicit δ in terms of ε."
+    },
+    {
+      "type": "derivation",
+      "question": "## Problem\nDerive the quadratic formula for ax² + bx + c = 0 (a ≠ 0).\n\n## Given\n- Start from ax² + bx + c = 0.\n- Complete the square.\n\n## Required\nShow the algebraic steps that isolate x."
+    },
+    {
+      "type": "derivation",
+      "question": "## Problem\nDerive d/dx[sin(x)] from first principles.\n\n## Given\n- Use lim_{h->0} (sin(x+h)-sin(x))/h.\n- Trigonometric identities from the source are allowed.\n\n## Required\nShow each transformation until the final derivative expression."
+    }
+  ]
+}

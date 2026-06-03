@@ -1,23 +1,7 @@
 // Client-side file reading utilities
 
 import type { DocumentIntakeIntent } from '@/lib/document-intake/types';
-
-// Vercel serverless requests are rejected before our API route runs when the
-// multipart body is too large. Keep the client-side limit below that ceiling.
-const SERVER_PARSE_FILE_LIMIT_BYTES = 4 * 1024 * 1024;
-
-function formatBytes(bytes: number): string {
-    if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
-}
-
-function buildTooLargeMessage(file: File): string {
-    return [
-        `檔案「${file.name}」大小為 ${formatBytes(file.size)}，超過目前線上解析上限 ${formatBytes(SERVER_PARSE_FILE_LIMIT_BYTES)}。`,
-        '請先壓縮檔案、拆成較小檔案，或只上傳需要出題/產生講稿的頁面後再試一次。',
-    ].join('\n');
-}
+import type { LLMConfig } from '@/lib/store';
 
 export async function readTextFile(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -59,12 +43,20 @@ export type ParsedFileResult = {
     metadata?: Record<string, any>;
 };
 
+export type ParseFileOptions = {
+    llmConfig?: Partial<LLMConfig>;
+};
+
 export async function parseFile(file: File): Promise<string> {
     const parsed = await parseFileDetailed(file);
     return parsed.content;
 }
 
-export async function parseFileDetailed(file: File, intent: DocumentIntakeIntent = 'generic'): Promise<ParsedFileResult> {
+export async function parseFileDetailed(
+    file: File,
+    intent: DocumentIntakeIntent = 'generic',
+    options: ParseFileOptions = {}
+): Promise<ParsedFileResult> {
     const fileType = file.name.split('.').pop()?.toLowerCase();
 
     switch (fileType) {
@@ -94,7 +86,7 @@ export async function parseFileDetailed(file: File, intent: DocumentIntakeIntent
         case 'pptx':
         case 'xlsx':
             // These require server-side processing
-            return await uploadAndParse(file, intent);
+            return await uploadAndParse(file, intent, options);
 
         default:
             throw new Error(`Unsupported file type: ${fileType}`);
@@ -102,7 +94,7 @@ export async function parseFileDetailed(file: File, intent: DocumentIntakeIntent
 }
 
 // Enhanced file parser for Exam Evaluation (supports images, ZIP, etc.)
-export async function parseFileForEvaluation(file: File): Promise<string> {
+export async function parseFileForEvaluation(file: File, options: ParseFileOptions = {}): Promise<string> {
     const fileType = file.name.split('.').pop()?.toLowerCase();
 
     switch (fileType) {
@@ -115,7 +107,7 @@ export async function parseFileForEvaluation(file: File): Promise<string> {
         case 'pptx':
         case 'xlsx':
             // These require server-side processing
-            return (await uploadAndParse(file)).content;
+            return (await uploadAndParse(file, 'evaluate_student_answer', options)).content;
 
         case 'png':
         case 'jpg':
@@ -142,18 +134,21 @@ export async function parseFileForEvaluation(file: File): Promise<string> {
     }
 }
 
-async function uploadAndParse(file: File, intent: DocumentIntakeIntent = 'generic'): Promise<ParsedFileResult> {
-    if (file.size > SERVER_PARSE_FILE_LIMIT_BYTES) {
-        throw new Error(buildTooLargeMessage(file));
-    }
-
+async function uploadAndParse(
+    file: File,
+    intent: DocumentIntakeIntent = 'generic',
+    options: ParseFileOptions = {}
+): Promise<ParsedFileResult> {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('intent', intent);
+    if (options.llmConfig) {
+        formData.append('llmConfig', JSON.stringify(options.llmConfig));
+    }
 
     try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), options.llmConfig ? 120000 : 60000);
 
         const response = await fetch('/api/parse-file', {
             method: 'POST',
@@ -165,9 +160,6 @@ async function uploadAndParse(file: File, intent: DocumentIntakeIntent = 'generi
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            if (response.status === 413) {
-                throw new Error(buildTooLargeMessage(file));
-            }
             throw new Error(errorData.error || `Failed to parse file (status: ${response.status})`);
         }
 
@@ -184,7 +176,7 @@ async function uploadAndParse(file: File, intent: DocumentIntakeIntent = 'generi
         };
     } catch (error: any) {
         if (error.name === 'AbortError') {
-            throw new Error('File upload timed out. Please try a smaller file.');
+            throw new Error('File upload timed out. Please try again.');
         }
         throw new Error(`Failed to upload file: ${error.message}`);
     }

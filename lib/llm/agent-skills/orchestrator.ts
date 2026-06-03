@@ -101,6 +101,8 @@ export class AgentOrchestrator {
       pointsPerItem,
     });
 
+    // Subject skill routing happens inside question_generator (progressive disclosure).
+
     // Parallel generation with concurrency control
     // Use smaller batch size to avoid overwhelming Gemini API (503 errors)
     const PARALLEL_BATCH_SIZE = 2; // Generate 2 items in parallel at a time (reduced from 3)
@@ -977,7 +979,11 @@ export class AgentOrchestrator {
       const outlineRefiner = skillRegistry.getSkill('outline_refiner');
       let outline = result.data.outline || null;
       let outlineSource = result.data.outline_source || 'heuristic';
-      if (outlineRefiner && llmContext?.llmConfig?.apiKey && Array.isArray(result.data.pages) && result.data.pages.length > 0) {
+      const cachedOutline = doc?.intake?.metadata?.refinedOutline;
+      if (cachedOutline && Array.isArray(cachedOutline.chapters) && cachedOutline.chapters.length > 0) {
+        outline = cachedOutline;
+        outlineSource = doc?.intake?.metadata?.outlineSource || 'upload_cached_llm_refined';
+      } else if (outlineRefiner && llmContext?.llmConfig?.apiKey && Array.isArray(result.data.pages) && result.data.pages.length > 0) {
         try {
           const refined = await outlineRefiner.execute({
             fileName: doc.name,
@@ -1887,6 +1893,8 @@ export class AgentOrchestrator {
       selectedSources: taskParams.sources,
       pdfFileData: directPdfAttachment?.pdfFileData,
       pdfFilename: directPdfAttachment?.pdfFilename,
+      subjectId: llmContext?.subject,
+      debugAllowFallback: Boolean(taskParams.debugAllowFallback),
     } as SkillInput;
 
     console.log(`[Orchestrator] Question input parameters:`, {
@@ -2309,6 +2317,7 @@ export class AgentOrchestrator {
       },
       moduleType,
       includeMetadata: true,
+      subjectId: questionData?.metadata?.subject_skill_id || llmContext?.subject,
     };
 
     const formatResult = await formatterSkill.execute(formatInput, llmContext);

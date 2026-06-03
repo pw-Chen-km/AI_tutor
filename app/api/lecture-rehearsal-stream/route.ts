@@ -31,6 +31,13 @@ type NormalizedLectureDocument = DocumentIntakeResult & {
   rawBase64?: string;
 };
 
+type IntakeLLMConfig = {
+  provider?: string;
+  apiKey?: string;
+  baseURL?: string;
+  model?: string;
+};
+
 function getLectureAddon(): { system: string; user: string } {
   const raw: any = promptTemplates as any;
   const tpl = raw?.lecture_rehearsal || {};
@@ -107,7 +114,29 @@ function buildSlidesFromDocument(doc: NormalizedLectureDocument, startIndex = 0)
   });
 }
 
-async function normalizeLectureDocuments(inputs: LectureDocumentInput[]): Promise<NormalizedLectureDocument[]> {
+function getIntakeTextLen(intake: Partial<DocumentIntakeResult> | null): number {
+  const pages = Array.isArray(intake?.pages) ? intake.pages : [];
+  return pages.reduce((sum, page: any) => sum + Number(page?.textLen || String(page?.text || '').length || 0), 0);
+}
+
+function isBlankPdfFallbackIntake(intake: Partial<DocumentIntakeResult> | null, type: string): boolean {
+  if (type !== 'pdf' || !intake || !Array.isArray(intake.pages) || intake.pages.length === 0) {
+    return false;
+  }
+  if (getIntakeTextLen(intake) > 0) return false;
+
+  const strategy = String((intake as any).strategy || '').toLowerCase();
+  const content = String((intake as any).content || '').toLowerCase();
+  const warnings = Array.isArray((intake as any).warnings) ? (intake as any).warnings.join('\n').toLowerCase() : '';
+  return strategy.includes('page-count-fallback')
+    || content.includes('pdf text extraction failed')
+    || warnings.includes('pdf text extraction failed');
+}
+
+async function normalizeLectureDocuments(
+  inputs: LectureDocumentInput[],
+  llmConfig?: IntakeLLMConfig
+): Promise<NormalizedLectureDocument[]> {
   const documents: NormalizedLectureDocument[] = [];
 
   for (const input of inputs) {
@@ -115,8 +144,9 @@ async function normalizeLectureDocuments(inputs: LectureDocumentInput[]): Promis
     const type = String(input?.type || name.split('.').pop() || 'unknown').toLowerCase();
     const rawBase64 = typeof input?.rawBase64 === 'string' ? input.rawBase64 : '';
     const intake = input?.intake && typeof input.intake === 'object' ? input.intake : null;
+    const blankPdfFallback = isBlankPdfFallbackIntake(intake, type);
 
-    if (intake && Array.isArray(intake.pages)) {
+    if (intake && Array.isArray(intake.pages) && !blankPdfFallback) {
       const content = String((intake as any).content || input.content || '').trim();
       const pages = intake.pages.length > 0
         ? intake.pages as any
@@ -142,8 +172,15 @@ async function normalizeLectureDocuments(inputs: LectureDocumentInput[]): Promis
         fileName: name,
         buffer: Buffer.from(rawBase64, 'base64'),
         intent: 'read_for_script_generation',
+        llmConfig,
       });
-      documents.push({ ...parsed, rawBase64 });
+      documents.push({
+        ...parsed,
+        warnings: blankPdfFallback
+          ? [...(parsed.warnings || []), 'Existing blank PDF page-count fallback was ignored and the raw PDF was reprocessed.']
+          : parsed.warnings,
+        rawBase64,
+      });
       continue;
     }
 
@@ -197,12 +234,14 @@ export async function POST(req: NextRequest) {
         const translateMarkdown = (lectureRoute as any).translateMarkdown;
 
         const llmPool = buildLLMPool ? buildLLMPool(apiKeys, provider, baseURL, model, providerModels) : [];
+        let effectiveProvider = provider;
         let effectiveApiKey = apiKey;
         let effectiveBaseURL = baseURL;
         let effectiveModel = model;
 
         if (!effectiveApiKey && llmPool.length > 0) {
           const defaultConfig = llmPool[0];
+          effectiveProvider = defaultConfig.provider;
           effectiveApiKey = defaultConfig.apiKey;
           effectiveBaseURL = defaultConfig.baseURL;
           effectiveModel = defaultConfig.model;
@@ -215,7 +254,12 @@ export async function POST(req: NextRequest) {
         }
 
         sendProgress({ type: 'progress', message: 'Preparing lecture documents...', current: 0, total: 100 });
-        const documents = await normalizeLectureDocuments(lectureDocumentsInput);
+        const documents = await normalizeLectureDocuments(lectureDocumentsInput, {
+          provider: effectiveProvider,
+          apiKey: effectiveApiKey,
+          baseURL: effectiveBaseURL,
+          model: effectiveModel,
+        });
         if (documents.length === 0) {
           sendProgress({ type: 'error', message: 'No lecture documents were provided.' });
           controller.close();
@@ -467,4 +511,3 @@ Rules:
     },
   });
 }
-

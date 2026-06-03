@@ -1,0 +1,70 @@
+{
+  "id": "computer-science",
+  "label": "Computer Science",
+  "aliases": [
+    "computer science",
+    "cs",
+    "programming",
+    "software engineering",
+    "software development",
+    "algorithms",
+    "data structures",
+    "python",
+    "java",
+    "javascript",
+    "typescript",
+    "c++",
+    "operating systems",
+    "compilers",
+    "oop",
+    "object oriented"
+  ],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "coding",
+    "debugging",
+    "trace",
+    "design"
+  ],
+  "preferredQuestionTypes": [
+    "coding",
+    "debugging",
+    "trace",
+    "multiple_choice"
+  ],
+  "sectionLabels": [
+    "Task",
+    "Inputs",
+    "Input",
+    "Output",
+    "Requirements",
+    "Requirement",
+    "Example",
+    "Examples",
+    "Expected Behavior",
+    "Debugging Focus",
+    "Code",
+    "Initial State",
+    "Trace Target"
+  ],
+  "questionShapes": {
+    "coding": "QUESTION SHAPE (Computer Science / coding):\n- Output the question as markdown with these sections in order: ## Task, ## Inputs, ## Output, ## Requirements, ## Example.\n- ## Task: one sentence describing what the function/program must do.\n- ## Inputs: bullet list, each entry written as `- <name>: <type> — <constraint>`.\n- ## Output: what gets returned, plus invalid-input behavior.\n- ## Requirements: 2-3 objective acceptance criteria.\n- ## Example: fenced ```python``` block with at least one call and its expected return.",
+    "debugging": "QUESTION SHAPE (Computer Science / debugging):\n- Output the question as markdown with these sections: ## Task, ## Expected Behavior, ## Code, ## Debugging Focus.\n- ## Expected Behavior: bullet list of contract requirements (these define what a 'bug' means).\n- ## Code: fenced ```python``` block containing the faulty snippet.\n- ## Debugging Focus: bullet list of categories of bugs students should look for (e.g., 'off-by-one in loop boundary').\n- Never label a style choice or design preference as a bug.",
+    "trace": "QUESTION SHAPE (Computer Science / trace):\n- Output the question as markdown with: ## Task, ## Initial State, ## Code, ## Trace Target.\n- ## Initial State: exact input values, variable assignments, or program state.\n- ## Code: fenced ```python``` block of the snippet to trace.\n- ## Trace Target: one of: final return value, printed output, or the value of one named variable at a specific step."
+  },
+  "formatting": {
+    "codeLanguage": "python",
+    "preferCodeFences": true,
+    "exampleStyle": "callable",
+    "wrapExampleInCode": true
+  },
+  "promptAddendum": "You are generating questions for a computer science course. Focus on programming correctness, algorithmic reasoning, data-structure behavior, and software engineering trade-offs. Define inputs, outputs, and edge cases explicitly. Never confuse style preferences with bugs. Use ```python``` (or the source's actual language) for all code, never raw text.",
+  "structuredExamples": [
+    {
+      "type": "coding",
+      "question": "## Task\nImplement a function `count_vowels(text: str) -> int` that returns how many vowels appear in `text`.\n\n## Inputs\n- text: str — non-empty ASCII string\n\n## Output\n- int — number of vowel characters (a, e, i, o, u), case-insensitive\n- Invalid input: raise ValueError if text is empty\n\n## Requirements\n- Treat both upper and lower case letters as the same vowel\n- Do not count 'y'\n- Run in a single linear pass\n\n## Example\n```python\ncount_vowels('Hello')\n# returns 2\n```"
+    }
+  ]
+}

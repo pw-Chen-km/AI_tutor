@@ -1,0 +1,62 @@
+{
+  "id": "history",
+  "label": "History",
+  "aliases": [
+    "history",
+    "world history",
+    "us history",
+    "european history",
+    "asian history",
+    "historiography",
+    "primary source",
+    "civilization",
+    "歷史",
+    "世界史",
+    "台灣史",
+    "中國史",
+    "近代史"
+  ],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "essay",
+    "reading_comprehension"
+  ],
+  "preferredQuestionTypes": [
+    "reading_comprehension",
+    "short_answer",
+    "multiple_choice",
+    "essay"
+  ],
+  "sectionLabels": [
+    "Source Material",
+    "Context",
+    "Time Period",
+    "Geographic Scope",
+    "Question",
+    "Analysis Lens",
+    "Instructions",
+    "Prompt"
+  ],
+  "questionShapes": {
+    "reading_comprehension": "QUESTION SHAPE (History / reading comprehension):\n- Output: ## Source Material, ## Context, ## Question.\n- ## Source Material: quoted excerpt (primary or secondary) faithful to source.\n- ## Context: who, when, where in 1-2 sentences if not obvious from passage.\n- ## Question: cause, comparison, author's purpose, or evidence use.",
+    "short_answer": "QUESTION SHAPE (History / short_answer):\n- Output: ## Context, ## Question, ## Required.\n- ## Required: length cue (1-2 sentences, 3 bullet causes).",
+    "multiple_choice": "QUESTION SHAPE (History / multiple_choice):\n- Stem should cite source context (period/place/document).\n- Options must test interpretation/evidence use, not isolated date recall.",
+    "essay": "QUESTION SHAPE (History / essay):\n- Output: ## Prompt, ## Source Material (optional), ## Requirements.\n- ## Requirements: thesis, number of examples, must cite provided sources only."
+  },
+  "formatting": {
+    "codeLanguage": null,
+    "preferCodeFences": false,
+    "exampleStyle": "quotation",
+    "wrapExampleInCode": false,
+    "quoteWith": ">"
+  },
+  "promptAddendum": "You are generating questions for a history course. Ground answers in provided sources or explicitly taught narratives. Use block quotes (>) for excerpts, never code fences. Distinguish fact questions from interpretive ones. Avoid anachronisms unless the source discusses them.",
+  "structuredExamples": [
+    {
+      "type": "reading_comprehension",
+      "question": "## Source Material\n> The strike spread from the textile mills to the docks within a week, as workers demanded not only higher wages but legal recognition of their union.\n\n## Context\nIndustrial city, 1919, labor movement\n\n## Question\nAccording to the passage, what two demands did workers make?"
+    }
+  ]
+}

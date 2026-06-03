@@ -1,0 +1,65 @@
+{
+  "id": "biology",
+  "label": "Biology",
+  "aliases": [
+    "biology",
+    "life science",
+    "anatomy",
+    "physiology",
+    "ecology",
+    "genetics",
+    "cell biology",
+    "molecular biology",
+    "microbiology",
+    "botany",
+    "zoology",
+    "evolution",
+    "生物",
+    "生理",
+    "生態",
+    "遺傳"
+  ],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "data_analysis",
+    "case_study"
+  ],
+  "preferredQuestionTypes": [
+    "multiple_choice",
+    "data_analysis",
+    "short_answer",
+    "case_study"
+  ],
+  "sectionLabels": [
+    "Scenario",
+    "Observation",
+    "Data",
+    "Experimental Setup",
+    "Question",
+    "Terminology",
+    "Diagram Description",
+    "Required"
+  ],
+  "questionShapes": {
+    "data_analysis": "QUESTION SHAPE (Biology / data_analysis):\n- Output: ## Scenario, ## Data (table or bullet measurements), ## Question.\n- Ask one interpretive task: trend, control comparison, or prediction.",
+    "case_study": "QUESTION SHAPE (Biology / case_study):\n- Output: ## Scenario, ## Observation, ## Question, ## Required.\n- Clinical or ecological vignette tied to source; Required names deliverable (diagnosis hypothesis, mechanism, intervention).",
+    "short_answer": "QUESTION SHAPE (Biology / short_answer):\n- Output: ## Scenario, ## Observation, ## Question, ## Required.\n- Focus on one pathway step, one structure-function link, or one experiment inference.\n- ## Required should bound the response (e.g., 1-2 sentences, two bullet points).",
+    "fill_in_blank": "QUESTION SHAPE (Biology / fill_in_blank):\n- Output: ## Scenario, ## Question.\n- Use exactly one blank (_____) tied to a named process, molecule, or structure from the source.\n- Avoid blanks with multiple equally valid completions."
+  },
+  "formatting": {
+    "codeLanguage": null,
+    "preferCodeFences": false,
+    "exampleStyle": "scientific",
+    "wrapExampleInCode": false,
+    "useMarkdownTables": true
+  },
+  "promptAddendum": "You are generating questions for a biology course. Use nomenclature and pathways exactly as in the source. For experiments, identify independent/dependent variables and controls. Do not use code fences. Tables are appropriate for numeric lab or survey data.",
+  "structuredExamples": [
+    {
+      "type": "data_analysis",
+      "question": "## Scenario\nStudents measure enzyme activity at different temperatures.\n\n## Data\n| Temperature (°C) | Reaction rate (μmol/min) |\n|------------------|--------------------------|\n| 10 | 2 |\n| 25 | 8 |\n| 40 | 12 |\n| 55 | 5 |\n\n## Question\nAt which temperature is activity highest, and what likely explains the drop at 55°C?"
+    }
+  ]
+}

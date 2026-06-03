@@ -250,6 +250,46 @@ function CodeSegment({ code, language }: { code: string; language: string }) {
     );
 }
 
+const markdownComponents = {
+    h2({ children }: any) {
+        return (
+            <h2 className="mt-5 first:mt-0 mb-2 text-sm font-semibold uppercase tracking-wide text-primary">
+                {children}
+            </h2>
+        );
+    },
+    h3({ children }: any) {
+        return (
+            <h3 className="mt-4 mb-2 text-sm font-semibold text-foreground">
+                {children}
+            </h3>
+        );
+    },
+    p({ children }: any) {
+        return <p className="my-2 leading-7 text-foreground">{children}</p>;
+    },
+    ul({ children }: any) {
+        return <ul className="my-2 ml-5 list-disc space-y-1">{children}</ul>;
+    },
+    ol({ children }: any) {
+        return <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>;
+    },
+    li({ children }: any) {
+        return <li className="pl-1 leading-7">{children}</li>;
+    },
+    code({ node, className, children, ...props }: any) {
+        const match = /language-(\w+)/.exec(className || '');
+        const isInline = !match;
+        return isInline ? (
+            <code className="rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-sm text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200" {...props}>
+                {children}
+            </code>
+        ) : (
+            <CodeSegment code={String(children).replace(/\n$/, '')} language={match[1]} />
+        );
+    },
+};
+
 interface MixedContentProps {
     content: string;
     className?: string;
@@ -266,23 +306,8 @@ export function MixedContent({ content, className = '' }: MixedContentProps) {
                 part.type === 'code' ? (
                     <CodeSegment key={idx} code={part.content} language={part.language || 'python'} />
                 ) : (
-                    <div key={idx} className="prose prose-sm dark:prose-invert max-w-none">
-                        <ReactMarkdown
-                            components={{
-                                // Customize code block rendering
-                                code({ node, className, children, ...props }: any) {
-                                    const match = /language-(\w+)/.exec(className || '');
-                                    const isInline = !match;
-                                    return isInline ? (
-                                        <code className={className} {...props}>
-                                            {children}
-                                        </code>
-                                    ) : (
-                                        <CodeSegment code={String(children).replace(/\n$/, '')} language={match[1]} />
-                                    );
-                                },
-                            }}
-                        >
+                    <div key={idx} className="max-w-none text-base">
+                        <ReactMarkdown components={markdownComponents}>
                             {part.content}
                         </ReactMarkdown>
                     </div>

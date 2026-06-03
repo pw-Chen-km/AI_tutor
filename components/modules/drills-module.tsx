@@ -8,7 +8,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Sparkles, Copy, Check, Loader2, RotateCcw } from 'lucide-react';
 import { createLLMClient, buildPrompt, buildRegeneratePrompt, buildSecondaryFixPrompt, generateContent } from '@/lib/llm/client';
-import { defaultWeights, getDrillsTypes, getSubjectConfig, weightsToCounts } from '@/lib/subjects';
+import {
+    defaultWeights,
+    getDrillsTypes,
+    getSubjectConfig,
+    hasCompletedSubjectDetectionForContextFiles,
+    resolveDetectedUiSubjectFromContextFiles,
+    weightsToCounts,
+} from '@/lib/subjects';
 import { ensureMarkdownCodeFences, wrapSolutionAsCodeIfCoding } from '@/lib/llm/format';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
@@ -68,6 +75,7 @@ export function DrillsModule() {
     const [progress, setProgress] = useState<{ current: number; total: number; message: string } | null>(null);
     const [numberOfQuestions, setNumberOfQuestions] = useState<number>(5);
     const [minutesPerProblem, setMinutesPerProblem] = useState<number>(8);
+    const [debugAllowFallback, setDebugAllowFallback] = useState<boolean>(false);
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
     const [selectedVariants, setSelectedVariants] = useState<Record<string, string[]>>({});
     const [displayedVariant, setDisplayedVariant] = useState<Record<string, string>>({});
@@ -78,13 +86,28 @@ export function DrillsModule() {
     // Get variants for drills
     const drillVariants = variants?.drills || {};
 
-    const subjectConfig = useMemo(() => getSubjectConfig(subject), [subject]);
-    const drillsTypes = useMemo(() => getDrillsTypes(subject, customQuestionTypes?.drills), [subject, customQuestionTypes?.drills]);
-    const [typeWeights, setTypeWeights] = useState<Record<string, number>>(() => defaultWeights(drillsTypes));
+    const detectedSubject = useMemo(() => resolveDetectedUiSubjectFromContextFiles(contextFiles), [contextFiles]);
+    const subjectDetectionDone = useMemo(
+        () => hasCompletedSubjectDetectionForContextFiles(contextFiles),
+        [contextFiles]
+    );
+    const subjectReady = contextFiles.length > 0 && subjectDetectionDone;
+    const effectiveSubject = subjectReady ? (detectedSubject || subject) : subject;
+    const subjectConfig = useMemo(() => getSubjectConfig(effectiveSubject), [effectiveSubject]);
+    const drillsTypes = useMemo(
+        () => (subjectReady ? getDrillsTypes(effectiveSubject, customQuestionTypes?.drills) : []),
+        [subjectReady, effectiveSubject, customQuestionTypes?.drills]
+    );
+    const [typeCounts, setTypeCounts] = useState<Record<string, number>>(() =>
+        weightsToCounts(numberOfQuestions, defaultWeights(drillsTypes))
+    );
     useEffect(() => {
-        setTypeWeights(defaultWeights(drillsTypes));
-    }, [drillsTypes]);
-    const typeCounts = useMemo(() => weightsToCounts(numberOfQuestions, typeWeights), [numberOfQuestions, typeWeights]);
+        setTypeCounts(weightsToCounts(numberOfQuestions, defaultWeights(drillsTypes)));
+    }, [drillsTypes, numberOfQuestions]);
+    const unassignedTypeCount = useMemo(() => {
+        const assigned = Object.values(typeCounts).reduce((sum, count) => sum + Math.max(0, Number(count) || 0), 0);
+        return Math.max(0, numberOfQuestions - assigned);
+    }, [typeCounts, numberOfQuestions]);
 
     const drills = generatedContent.drills as Drill[];
     const safeDrills = Array.isArray(drills) ? drills : [];
@@ -107,8 +130,6 @@ export function DrillsModule() {
             const num = Number.isFinite(Number(d?.number)) ? Number(d.number) : i + 1;
             const itemId = `drill-${num}`;
             
-            // Get the displayed/selected variant for this item
-            const displayVariantId = displayedVariant[itemId] || 'original';
             const displayedDrill = getDisplayedDrill(d, i);
             
             return {
@@ -161,6 +182,7 @@ export function DrillsModule() {
                         typeCounts,
                         availableFiles: contextFiles.map((f) => f.name),
                         sourceDocuments,
+                        debugAllowFallback,
                     },
                     llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
@@ -334,6 +356,7 @@ export function DrillsModule() {
                         minutesPerProblem,
                         subject,
                         sourceDocuments,
+                        debugAllowFallback,
                     },
                     llmConfig: activeLLMConfig,
                     languageConfig: {
@@ -426,6 +449,7 @@ export function DrillsModule() {
                                     minutesPerProblem,
                                     subject,
                                     sourceDocuments,
+                                    debugAllowFallback,
                                 },
                                 llmConfig: activeLLMConfig,
                                 languageConfig: {
@@ -530,7 +554,7 @@ export function DrillsModule() {
     };
     
     // Get the drill content to display (either original or selected variant)
-    const getDisplayedDrill = (drill: Drill, index: number) => {
+    function getDisplayedDrill(drill: Drill, index: number) {
         const itemId = `drill-${drill.number ?? index + 1}`;
         const displayVariantId = displayedVariant[itemId];
         
@@ -558,7 +582,7 @@ export function DrillsModule() {
             options: variant.options || drill.options,
             options_secondary: variant.options_secondary || drill.options_secondary,
         };
-    };
+    }
 
     // Get display text for variant preview
     const getVariantDisplayText = (item: any) => {
@@ -628,23 +652,39 @@ export function DrillsModule() {
                                 onChange={(e) => setMinutesPerProblem(Math.max(1, Math.min(180, Number(e.target.value) || 1)))}
                             />
                         </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="drills-debug-fallback">Debug: Allow Fallback</Label>
+                            <div className="h-10 flex items-center">
+                                <input
+                                    id="drills-debug-fallback"
+                                    type="checkbox"
+                                    checked={debugAllowFallback}
+                                    onChange={(e) => setDebugAllowFallback(e.target.checked)}
+                                />
+                            </div>
+                        </div>
 
                     </div>
 
                     <div className="mb-4">
-                        <QuestionTypeMix
-                            title="Question Type Mix"
-                            subjectLabel={subjectConfig.label}
-                            types={drillsTypes}
-                            total={numberOfQuestions}
-                            weights={typeWeights}
-                            counts={typeCounts}
-                            onChange={setTypeWeights}
-                        />
+                        {subjectReady ? (
+                            <QuestionTypeMix
+                                title="Question Type Mix"
+                                subjectLabel={subjectConfig.label}
+                                types={drillsTypes}
+                                total={numberOfQuestions}
+                                counts={typeCounts}
+                                onChange={setTypeCounts}
+                            />
+                        ) : (
+                            <p className="text-sm text-slate-500">
+                                Detecting subject from uploaded materials. Question types will appear after detection.
+                            </p>
+                        )}
                     </div>
                     <Button
                         onClick={handleGenerate}
-                        disabled={loading || contextFiles.length === 0}
+                        disabled={loading || contextFiles.length === 0 || !subjectReady || unassignedTypeCount !== 0}
                         className="w-full sm:w-auto"
                         size="lg"
                     >
@@ -680,6 +720,16 @@ export function DrillsModule() {
                         <p className="text-sm text-accent mt-3 flex items-center gap-2">
                             <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
                             Please upload course materials first
+                        </p>
+                    )}
+                    {contextFiles.length > 0 && !subjectReady && (
+                        <p className="text-sm text-amber-600 mt-3">
+                            Please wait for subject detection before assigning question types.
+                        </p>
+                    )}
+                    {unassignedTypeCount > 0 && (
+                        <p className="text-sm text-amber-600 mt-3">
+                            Please assign all questions before generating. Remaining: {unassignedTypeCount}
                         </p>
                     )}
                 </CardContent>
@@ -842,7 +892,7 @@ export function DrillsModule() {
                                             availableFiles={contextFiles}
                                             currentSources={drill.sources}
                                             isLoading={regenerating[index]}
-                                            questionTypes={customQuestionTypes.drills || []}
+                                            questionTypes={drillsTypes.map((type) => type.id)}
                                             currentQuestionType={drill.format}
                                             onRegenerate={async (selectedFile, selectedPages, selectedQuestionType) => {
                                                 setRegenerating((s) => ({ ...s, [index]: true }));
@@ -867,6 +917,7 @@ export function DrillsModule() {
                                                                 selectedPages,
                                                                 availableFiles: [selectedFile],
                                                                 sourceDocuments,
+                                                                debugAllowFallback,
                                                             },
                                                             llmConfig: activeLLMConfig,
                                                             languageConfig: {

@@ -1,0 +1,64 @@
+{
+  "id": "civics",
+  "label": "Civics & Social Studies",
+  "aliases": [
+    "civics",
+    "civic education",
+    "government",
+    "political science",
+    "social studies",
+    "sociology",
+    "law",
+    "constitutional law",
+    "public policy",
+    "citizenship",
+    "公民",
+    "社會",
+    "政治",
+    "法律",
+    "社會學"
+  ],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "case_study",
+    "essay"
+  ],
+  "preferredQuestionTypes": [
+    "case_study",
+    "multiple_choice",
+    "short_answer",
+    "essay"
+  ],
+  "sectionLabels": [
+    "Scenario",
+    "Stakeholders",
+    "Institutional Context",
+    "Legal or Policy Framework",
+    "Question",
+    "Decision Point",
+    "Required",
+    "Prompt",
+    "Requirements"
+  ],
+  "questionShapes": {
+    "case_study": "QUESTION SHAPE (Civics / case_study):\n- Output: ## Scenario, ## Stakeholders, ## Institutional Context, ## Decision Point, ## Required.\n- ## Decision Point: policy, vote, or rights conflict to analyze.\n- ## Required: one deliverable (list checks/balances, recommend action, identify branch).",
+    "essay": "QUESTION SHAPE (Civics / essay):\n- Output: ## Prompt, ## Requirements.\n- Argue using concepts from source; state if both sides required.",
+    "fill_in_blank": "QUESTION SHAPE (Civics / fill_in_blank):\n- Output: ## Scenario, ## Question.\n- Use one canonical key-term blank (_____).",
+    "multiple_choice": "QUESTION SHAPE (Civics / multiple_choice):\n- Test definition, branch function, or consequence of a policy described in stem."
+  },
+  "formatting": {
+    "codeLanguage": null,
+    "preferCodeFences": false,
+    "exampleStyle": "civic",
+    "wrapExampleInCode": false
+  },
+  "promptAddendum": "You are generating questions for civics or social studies. Name institutions, levels of government, and rights accurately per the source. Case studies should present balanced facts before asking for analysis. Do not use code fences. Distinguish law-as-written in source from opinion questions clearly labeled in Required.",
+  "structuredExamples": [
+    {
+      "type": "case_study",
+      "question": "## Scenario\nA city council debates a zoning change that would allow a factory near a residential neighborhood.\n\n## Stakeholders\nResidents, factory owners, city council, environmental agency\n\n## Institutional Context\nLocal zoning board holds public hearings; council votes by simple majority\n\n## Decision Point\nShould the council approve the change?\n\n## Required\nIdentify two constitutional or procedural principles from the source that apply, and one trade-off each stakeholder faces."
+    }
+  ]
+}

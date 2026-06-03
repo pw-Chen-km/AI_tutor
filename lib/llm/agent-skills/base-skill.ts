@@ -279,14 +279,18 @@ export abstract class BaseSkill implements AgentSkill {
             };
           }
         } else {
-          const response = await client.chat.completions.create({
+          const chatRequest: any = {
             model: model || 'gpt-5.5',
             messages: messages,
             response_format: { type: "json_object" },
-            temperature: options?.temperature,
             // gpt-5.4-mini may reject `max_tokens`; use `max_completion_tokens` instead.
             max_completion_tokens: options?.maxTokens || 16000,
-          });
+          };
+          const normalizedModel = String(model || '').toLowerCase();
+          if (typeof options?.temperature === 'number' && !normalizedModel.startsWith('gpt-5')) {
+            chatRequest.temperature = options.temperature;
+          }
+          const response = await client.chat.completions.create(chatRequest);
 
           rawContent = response.choices[0]?.message?.content || '';
 

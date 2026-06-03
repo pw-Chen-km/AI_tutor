@@ -11,9 +11,15 @@ import { Sparkles, Copy, Check, Loader2, RotateCcw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import { defaultWeights, getLabTypes, weightsToCounts } from '@/lib/subjects';
+import {
+    defaultWeights,
+    getLabTypes,
+    getSubjectConfig,
+    hasCompletedSubjectDetectionForContextFiles,
+    resolveDetectedUiSubjectFromContextFiles,
+    weightsToCounts,
+} from '@/lib/subjects';
 import { ensureMarkdownCodeFences, wrapSolutionAsCodeIfCoding } from '@/lib/llm/format';
-import { getSubjectConfig } from '@/lib/subjects';
 import { QuestionTypeMix } from '@/components/shared/question-type-mix';
 import { ExportPanel, type ExportItem } from '@/components/shared/export-panel';
 import { CodeBlock } from '@/components/shared/code-block';
@@ -71,6 +77,7 @@ export function LabsModule() {
     const [progress, setProgress] = useState<{ current: number; total: number; message: string } | null>(null);
     const [numberOfProblems, setNumberOfProblems] = useState(5);
     const [minutesPerProblem, setMinutesPerProblem] = useState(30);
+    const [debugAllowFallback, setDebugAllowFallback] = useState<boolean>(false);
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
     const [selectedVariants, setSelectedVariants] = useState<Record<string, string[]>>({});
     const [displayedVariant, setDisplayedVariant] = useState<Record<string, string>>({});
@@ -93,13 +100,28 @@ export function LabsModule() {
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
     const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
-    const subjectConfig = useMemo(() => getSubjectConfig(subject), [subject]);
-    const labTypes = useMemo(() => getLabTypes(subject, customQuestionTypes?.labs), [subject, customQuestionTypes?.labs]);
-    const [typeWeights, setTypeWeights] = useState<Record<string, number>>(() => defaultWeights(labTypes));
+    const detectedSubject = useMemo(() => resolveDetectedUiSubjectFromContextFiles(contextFiles), [contextFiles]);
+    const subjectDetectionDone = useMemo(
+        () => hasCompletedSubjectDetectionForContextFiles(contextFiles),
+        [contextFiles]
+    );
+    const subjectReady = contextFiles.length > 0 && subjectDetectionDone;
+    const effectiveSubject = subjectReady ? (detectedSubject || subject) : subject;
+    const subjectConfig = useMemo(() => getSubjectConfig(effectiveSubject), [effectiveSubject]);
+    const labTypes = useMemo(
+        () => (subjectReady ? getLabTypes(effectiveSubject, customQuestionTypes?.labs) : []),
+        [subjectReady, effectiveSubject, customQuestionTypes?.labs]
+    );
+    const [typeCounts, setTypeCounts] = useState<Record<string, number>>(() =>
+        weightsToCounts(numberOfProblems, defaultWeights(labTypes))
+    );
     useEffect(() => {
-        setTypeWeights(defaultWeights(labTypes));
-    }, [labTypes]);
-    const typeCounts = useMemo(() => weightsToCounts(numberOfProblems, typeWeights), [numberOfProblems, typeWeights]);
+        setTypeCounts(weightsToCounts(numberOfProblems, defaultWeights(labTypes)));
+    }, [labTypes, numberOfProblems]);
+    const unassignedTypeCount = useMemo(() => {
+        const assigned = Object.values(typeCounts).reduce((sum, count) => sum + Math.max(0, Number(count) || 0), 0);
+        return Math.max(0, numberOfProblems - assigned);
+    }, [typeCounts, numberOfProblems]);
 
     // Variant helpers
     const getItemId = (index: number) => `labs-${index + 1}`;
@@ -286,6 +308,7 @@ export function LabsModule() {
                         typeCounts,
                         availableFiles: contextFiles.map((f) => f.name),
                         sourceDocuments,
+                        debugAllowFallback,
                     },
                     llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
@@ -425,6 +448,7 @@ export function LabsModule() {
                         subject,
                         availableFiles: contextFiles.map((f) => f.name),
                         sourceDocuments,
+                        debugAllowFallback,
                     },
                     llmConfig: activeLLMConfig,
                     languageConfig: {
@@ -484,6 +508,7 @@ export function LabsModule() {
                                     minutesPerProblem,
                                     subject,
                                     sourceDocuments,
+                                    debugAllowFallback,
                                 },
                                 llmConfig: activeLLMConfig,
                                 languageConfig: {
@@ -562,7 +587,7 @@ export function LabsModule() {
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-3 gap-4">
                         <div>
                             <Label htmlFor="num-problems">Number of Problems</Label>
                             <Input
@@ -589,6 +614,17 @@ export function LabsModule() {
                                 onChange={(e) => setMinutesPerProblem(parseInt(e.target.value) || 10)}
                             />
                         </div>
+                        <div>
+                            <Label htmlFor="labs-debug-fallback">Debug: Allow Fallback</Label>
+                            <div className="h-10 flex items-center">
+                                <input
+                                    id="labs-debug-fallback"
+                                    type="checkbox"
+                                    checked={debugAllowFallback}
+                                    onChange={(e) => setDebugAllowFallback(e.target.checked)}
+                                />
+                            </div>
+                        </div>
                     </div>
 
                     <div className="bg-blue-50 dark:bg-blue-950/30 p-3 rounded-lg">
@@ -597,19 +633,24 @@ export function LabsModule() {
                         </p>
                     </div>
 
-                    <QuestionTypeMix
-                        title="Question Type Mix"
-                        subjectLabel={subjectConfig.label}
-                        types={labTypes}
-                        total={numberOfProblems}
-                        weights={typeWeights}
-                        counts={typeCounts}
-                        onChange={setTypeWeights}
-                    />
+                    {subjectReady ? (
+                        <QuestionTypeMix
+                            title="Question Type Mix"
+                            subjectLabel={subjectConfig.label}
+                            types={labTypes}
+                            total={numberOfProblems}
+                            counts={typeCounts}
+                            onChange={setTypeCounts}
+                        />
+                    ) : (
+                        <p className="text-sm text-slate-500">
+                            Detecting subject from uploaded materials. Question types will appear after detection.
+                        </p>
+                    )}
 
                     <Button
                         onClick={handleGenerate}
-                        disabled={loading || contextFiles.length === 0}
+                        disabled={loading || contextFiles.length === 0 || !subjectReady || unassignedTypeCount !== 0}
                         size="lg"
                         className="w-full"
                     >
@@ -644,6 +685,16 @@ export function LabsModule() {
                     {contextFiles.length === 0 && (
                         <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
                             ⚠️ Please upload course materials first
+                        </p>
+                    )}
+                    {contextFiles.length > 0 && !subjectReady && (
+                        <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+                            ⚠️ Please wait for subject detection before assigning question types
+                        </p>
+                    )}
+                    {unassignedTypeCount > 0 && (
+                        <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+                            ⚠️ Please assign all questions. Remaining: {unassignedTypeCount}
                         </p>
                     )}
                 </CardContent>
@@ -758,7 +809,7 @@ export function LabsModule() {
                                             availableFiles={contextFiles}
                                             currentSources={lab.sources}
                                             isLoading={regenerating[index]}
-                                            questionTypes={customQuestionTypes.labs || []}
+                                            questionTypes={labTypes.map((type) => type.id)}
                                             currentQuestionType={lab.problem_type}
                                             onRegenerate={async (selectedFile, selectedPages, selectedQuestionType) => {
                                                 setRegenerating((s) => ({ ...s, [index]: true }));
@@ -783,6 +834,7 @@ export function LabsModule() {
                                                                 selectedPages,
                                                                 availableFiles: [selectedFile],
                                                                 sourceDocuments,
+                                                                debugAllowFallback,
                                                             },
                                                             llmConfig: activeLLMConfig,
                                                             languageConfig: {

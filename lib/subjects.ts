@@ -25,6 +25,11 @@ export type QuestionTypeId =
   | 'multiple_choice'
   | 'fill_in_blank'
   | 'short_answer'
+  | 'cloze'
+  | 'reading_comprehension'
+  | 'translation'
+  | 'grammar_correction'
+  | 'essay'
   | 'calculation'
   | 'proof'
   | 'derivation'
@@ -55,6 +60,11 @@ export const ALL_QUESTION_TYPES: QuestionTypeConfig[] = [
   { id: 'multiple_choice', label: 'Multiple Choice', defaultWeight: 15 },
   { id: 'fill_in_blank', label: 'Fill in the Blank', defaultWeight: 10 },
   { id: 'short_answer', label: 'Short Answer', defaultWeight: 15 },
+  { id: 'cloze', label: 'Cloze', defaultWeight: 10 },
+  { id: 'reading_comprehension', label: 'Reading Comprehension', defaultWeight: 10 },
+  { id: 'translation', label: 'Translation', defaultWeight: 10 },
+  { id: 'grammar_correction', label: 'Grammar Correction', defaultWeight: 10 },
+  { id: 'essay', label: 'Essay', defaultWeight: 10 },
   { id: 'calculation', label: 'Calculation', defaultWeight: 15 },
   { id: 'proof', label: 'Proof', defaultWeight: 10 },
   { id: 'derivation', label: 'Derivation', defaultWeight: 10 },
@@ -65,6 +75,90 @@ export const ALL_QUESTION_TYPES: QuestionTypeConfig[] = [
   { id: 'data_analysis', label: 'Data Analysis', defaultWeight: 10 },
   { id: 'case_study', label: 'Case Study', defaultWeight: 15 },
 ];
+
+const SUBJECT_SUPPORTED_TYPES_BY_SKILL_ID: Record<string, QuestionTypeId[]> = {
+  'computer-science': ['multiple_choice', 'fill_in_blank', 'short_answer', 'coding', 'debugging', 'trace', 'design'],
+  language: ['multiple_choice', 'fill_in_blank', 'short_answer', 'cloze', 'reading_comprehension', 'translation', 'grammar_correction', 'essay'],
+  finance: ['multiple_choice', 'fill_in_blank', 'short_answer', 'calculation', 'case_study', 'data_analysis', 'design'],
+  mathematics: ['multiple_choice', 'fill_in_blank', 'short_answer', 'calculation', 'proof', 'derivation'],
+  physics: ['multiple_choice', 'fill_in_blank', 'short_answer', 'calculation', 'derivation'],
+  chemistry: ['multiple_choice', 'fill_in_blank', 'short_answer', 'calculation', 'data_analysis'],
+  biology: ['multiple_choice', 'fill_in_blank', 'short_answer', 'data_analysis', 'case_study'],
+  history: ['multiple_choice', 'fill_in_blank', 'short_answer', 'essay', 'reading_comprehension'],
+  geography: ['multiple_choice', 'fill_in_blank', 'short_answer', 'data_analysis', 'case_study'],
+  civics: ['multiple_choice', 'fill_in_blank', 'short_answer', 'case_study', 'essay'],
+  default: ['multiple_choice', 'fill_in_blank', 'short_answer', 'calculation', 'proof', 'derivation', 'coding', 'debugging', 'trace', 'design', 'data_analysis', 'case_study'],
+};
+
+function normalizeToSkillSubjectId(subjectId: string | undefined): string {
+  const raw = String(subjectId || '').trim().toLowerCase();
+  if (!raw) return 'computer-science';
+  const direct = raw.replace(/_/g, '-');
+  if (SUBJECT_SUPPORTED_TYPES_BY_SKILL_ID[direct]) return direct;
+
+  const aliasMap: Record<string, string> = {
+    computer_science: 'computer-science',
+    political_science: 'civics',
+    sociology: 'civics',
+    english_literature: 'language',
+    accounting: 'finance',
+    economics: 'finance',
+  };
+  return aliasMap[raw] || direct;
+}
+
+export function getSubjectSupportedQuestionTypes(subjectId: string | undefined): QuestionTypeId[] | null {
+  const normalized = normalizeToSkillSubjectId(subjectId);
+  return SUBJECT_SUPPORTED_TYPES_BY_SKILL_ID[normalized] || null;
+}
+
+export function mapSkillSubjectToUiSubject(skillSubjectId: string): string {
+  const normalized = String(skillSubjectId || '').trim().toLowerCase();
+  const map: Record<string, string> = {
+    'computer-science': 'computer_science',
+    language: 'english_literature',
+    civics: 'political_science',
+    default: 'customized',
+  };
+  return map[normalized] || normalized.replace(/-/g, '_');
+}
+
+export function resolveDetectedUiSubjectFromContextFiles(
+  contextFiles: Array<{ intake?: { metadata?: Record<string, any> } }>
+): string | null {
+  const candidates = contextFiles
+    .map((file) => ({
+      skillSubjectId: String(file?.intake?.metadata?.detectedSubjectId || '').trim().toLowerCase(),
+      confidence: Number(file?.intake?.metadata?.detectedSubjectConfidence || 0),
+    }))
+    .filter((item) => item.skillSubjectId && item.skillSubjectId !== 'default' && item.confidence >= 0.6);
+
+  if (candidates.length === 0) return null;
+  const unique = [...new Set(candidates.map((item) => item.skillSubjectId))];
+  if (unique.length !== 1) return null;
+  return mapSkillSubjectToUiSubject(unique[0]);
+}
+
+export function hasCompletedSubjectDetectionForContextFiles(
+  contextFiles: Array<{ intake?: { metadata?: Record<string, any> } }>
+): boolean {
+  if (!Array.isArray(contextFiles) || contextFiles.length === 0) return false;
+  return contextFiles.every((file) =>
+    Object.prototype.hasOwnProperty.call(file?.intake?.metadata || {}, 'detectedSubjectId')
+  );
+}
+
+function filterBySubjectSupportedTypes(
+  subjectId: string | undefined,
+  types: QuestionTypeConfig[]
+): QuestionTypeConfig[] {
+  if (subjectId === 'customized') return types;
+  const supported = getSubjectSupportedQuestionTypes(subjectId);
+  if (!supported || supported.length === 0) return types;
+  const allowed = new Set(supported);
+  const filtered = types.filter((t) => allowed.has(t.id));
+  return filtered.length > 0 ? filtered : types;
+}
 
 export const SUBJECTS: SubjectConfig[] = [
   // Customized option - allows user to select any question types
@@ -465,7 +559,7 @@ export function getDrillsTypes(subjectId: string | undefined, customTypes?: stri
     return ALL_QUESTION_TYPES.filter(t => customTypes.includes(t.id));
   }
 
-  return types;
+  return filterBySubjectSupportedTypes(subjectId, types);
 }
 
 export function getLabTypes(subjectId: string | undefined, customTypes?: string[]) {
@@ -477,7 +571,7 @@ export function getLabTypes(subjectId: string | undefined, customTypes?: string[
     return ALL_QUESTION_TYPES.filter(t => customTypes.includes(t.id));
   }
 
-  return types;
+  return filterBySubjectSupportedTypes(subjectId, types);
 }
 
 export function getHomeworkTypes(subjectId: string | undefined, customTypes?: string[]) {
@@ -488,7 +582,7 @@ export function getHomeworkTypes(subjectId: string | undefined, customTypes?: st
     return ALL_QUESTION_TYPES.filter(t => customTypes.includes(t.id));
   }
 
-  return s.homeworkTypes;
+  return filterBySubjectSupportedTypes(subjectId, s.homeworkTypes);
 }
 
 export function getExamTypes(subjectId: string | undefined, customTypes?: string[]) {
@@ -499,7 +593,7 @@ export function getExamTypes(subjectId: string | undefined, customTypes?: string
     return ALL_QUESTION_TYPES.filter(t => customTypes.includes(t.id));
   }
 
-  return s.examTypes;
+  return filterBySubjectSupportedTypes(subjectId, s.examTypes);
 }
 
 export function defaultWeights(types: QuestionTypeConfig[]) {
@@ -510,6 +604,7 @@ export function defaultWeights(types: QuestionTypeConfig[]) {
 
 export function weightsToCounts(total: number, weights: Record<string, number>) {
   const keys = Object.keys(weights);
+  if (keys.length === 0) return {};
   const raw = keys.map((k) => ({ k, w: Math.max(0, Number(weights[k]) || 0) }));
   const sum = raw.reduce((s, x) => s + x.w, 0);
   if (total <= 0) return {};

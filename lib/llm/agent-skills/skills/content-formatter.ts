@@ -6,6 +6,8 @@
 
 import { BaseSkill } from '../base-skill';
 import { SkillInput, SkillOutput, SkillContext, SkillMetadata } from '../types';
+import { SubjectProfile, loadSubjectProfile } from './subject-profile-loader';
+import { runFormatQuestionScript } from '../subject-skills/format-registry';
 
 export class ContentFormatterSkill extends BaseSkill {
   metadata: SkillMetadata = {
@@ -15,8 +17,24 @@ export class ContentFormatterSkill extends BaseSkill {
     version: '1.0.0',
     estimatedTokens: 200,
     requiredInputs: ['content', 'moduleType'],
-    optionalInputs: ['includeMetadata'],
+    optionalInputs: ['includeMetadata', 'subjectProfile', 'subjectId'],
   };
+
+  private currentSubjectProfile: SubjectProfile = loadSubjectProfile('default');
+
+  private getSubjectProfile(): SubjectProfile {
+    return this.currentSubjectProfile;
+  }
+
+  private get isCodeFenceFriendly(): boolean {
+    const formatting = this.currentSubjectProfile?.formatting || {};
+    return formatting.preferCodeFences !== false;
+  }
+
+  private get defaultCodeLanguage(): string {
+    const lang = this.currentSubjectProfile?.formatting?.codeLanguage;
+    return typeof lang === 'string' && lang.trim() ? lang.trim() : 'python';
+  }
 
   private isCodingLikeType(questionType: any): boolean {
     const normalized = String(questionType || '').toLowerCase();
@@ -92,6 +110,151 @@ export class ContentFormatterSkill extends BaseSkill {
 
   private uniqueStrings(values: string[]): string[] {
     return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+  }
+
+  private normalizeStructuredPromptMarkdown(text: string): string {
+    const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+    if (!raw) return raw;
+
+    const profile = this.getSubjectProfile();
+    const profileLabels = Array.isArray(profile?.sectionLabels) ? profile.sectionLabels : [];
+    // Always include a small default set so legacy LLM output still gets structured.
+    const defaultLabels = [
+      'Task', 'Inputs', 'Input', 'Output', 'Requirements', 'Requirement',
+      'Example', 'Examples', 'Expected Behavior', 'Debugging Focus',
+      'Code', 'Initial State', 'Trace Target',
+      'Passage', 'Context', 'Question', 'Choices', 'Vocabulary', 'Grammar Point', 'Instructions',
+      'Source Text', 'Target Language',
+      'Scenario', 'Given Data', 'Assumptions', 'Required', 'Decision Point', 'Formula', 'Analysis Lens',
+    ];
+    const labelSet = new Set<string>([...defaultLabels, ...profileLabels]);
+
+    const lines = raw.split('\n').map((line) => line.trimEnd());
+    const hasPlainSectionLabels = lines.some((line) => labelSet.has(line.trim()));
+    if (!hasPlainSectionLabels) return raw;
+
+    const codeFenceLang = this.isCodeFenceFriendly ? this.defaultCodeLanguage : '';
+    const allowCodeFence = this.isCodeFenceFriendly;
+
+    const listSectionNames = new Set([
+      'Inputs', 'Input', 'Output', 'Requirements', 'Requirement',
+      'Expected Behavior', 'Debugging Focus', 'Choices', 'Given Data',
+      'Assumptions', 'Vocabulary',
+    ]);
+    const exampleSectionNames = new Set(['Example', 'Examples']);
+    const quoteSectionNames = new Set(['Passage', 'Source Text', 'Sentence']);
+
+    const normalized: string[] = [];
+    let currentSection = '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        normalized.push('');
+        continue;
+      }
+
+      if (labelSet.has(trimmed)) {
+        currentSection = trimmed;
+        normalized.push(`## ${trimmed}`);
+        continue;
+      }
+
+      const isListSection = listSectionNames.has(currentSection);
+      const isExampleSection = exampleSectionNames.has(currentSection);
+      const isQuoteSection = quoteSectionNames.has(currentSection);
+
+      if (isListSection && !/^[-*]\s+/.test(trimmed) && !trimmed.startsWith('|')) {
+        normalized.push(`- ${trimmed}`);
+      } else if (isExampleSection && allowCodeFence && !trimmed.startsWith('```') && /(\w+\([^)]*\)|->|=>|#)/.test(trimmed)) {
+        normalized.push(`\`\`\`${codeFenceLang}\n${trimmed.replace(/\s*->\s*/g, '\n# returns ')}\n\`\`\``);
+      } else if (isQuoteSection && !trimmed.startsWith('>') && !trimmed.startsWith('```')) {
+        normalized.push(`> ${trimmed}`);
+      } else {
+        normalized.push(line);
+      }
+    }
+
+    return normalized
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  private formatQuestionForDisplay(questionType: any, questionText: string, questionData: any): string {
+    const normalizedType = String(questionType || questionData?.type || '').toLowerCase();
+    const metadata = questionData?.metadata && typeof questionData.metadata === 'object' ? questionData.metadata : {};
+    const rawQuestion = this.normalizeStructuredPromptMarkdown(String(questionText || '').trim());
+    if (!rawQuestion) return rawQuestion;
+    if (/^#{2,3}\s+/m.test(rawQuestion)) return rawQuestion;
+
+    const profile = this.getSubjectProfile();
+    const profileSupportsType = Array.isArray(profile?.supportedQuestionTypes) && profile.supportedQuestionTypes.length > 0;
+    const isCodingFriendlySubject = !profileSupportsType
+      || profile.supportedQuestionTypes.some((t) => ['coding', 'debugging', 'trace'].includes(t));
+
+    if (isCodingFriendlySubject && this.isCodingLikeType(normalizedType)) {
+      const contract = metadata?.function_contract && typeof metadata.function_contract === 'object'
+        ? metadata.function_contract
+        : {};
+      const inputs = this.toStringArray(contract.inputs);
+      const requirements = this.uniqueStrings([
+        ...this.toStringArray(questionData?.requirements),
+        ...this.toStringArray(metadata?.requirements),
+      ]);
+      const examples = this.toStringArray(metadata?.examples);
+      const output = String(contract.output || '').trim();
+      const invalidInputBehavior = String(contract.invalid_input_behavior || '').trim();
+      const functionSignature = rawQuestion.match(/\b[A-Za-z_][A-Za-z0-9_]*\([^)]*\)/)?.[0] || '';
+
+      const sections = [
+        `## Task\n${functionSignature ? `Write a Python function \`${functionSignature}\`.` : rawQuestion}`,
+      ];
+      if (inputs.length > 0) {
+        sections.push(`## Inputs\n${inputs.map((input) => `- ${input}`).join('\n')}`);
+      }
+      if (output || invalidInputBehavior) {
+        sections.push(`## Output\n${[
+          output ? `- ${output}` : '',
+          invalidInputBehavior ? `- Invalid input: ${invalidInputBehavior}` : '',
+        ].filter(Boolean).join('\n')}`);
+      }
+      if (requirements.length > 0) {
+        sections.push(`## Requirements\n${requirements.map((requirement) => `- ${requirement}`).join('\n')}`);
+      }
+      if (examples.length > 0) {
+        sections.push(`## Example\n${examples.map((example) => `\`\`\`python\n${example.replace(/\s*->\s*/g, '\n# returns ')}\n\`\`\``).join('\n\n')}`);
+      }
+      if (sections.length > 1) return sections.join('\n\n');
+    }
+
+    if (isCodingFriendlySubject && normalizedType.includes('debugging')) {
+      const expectedBehavior = this.toStringArray(metadata?.expected_behavior);
+      const bugFocus = this.toStringArray(metadata?.bug_focus);
+      const sections = [`## Task\n${rawQuestion}`];
+      if (expectedBehavior.length > 0) {
+        sections.push(`## Expected Behavior\n${expectedBehavior.map((item) => `- ${item}`).join('\n')}`);
+      }
+      if (bugFocus.length > 0) {
+        sections.push(`## Debugging Focus\n${bugFocus.map((item) => `- ${item}`).join('\n')}`);
+      }
+      if (sections.length > 1) return sections.join('\n\n');
+    }
+
+    if (isCodingFriendlySubject && normalizedType.includes('trace')) {
+      const initialState = String(metadata?.initial_state || '').trim();
+      const traceTarget = String(metadata?.trace_target || '').trim();
+      const sections = [`## Task\n${rawQuestion}`];
+      if (initialState) sections.push(`## Initial State\n${initialState}`);
+      if (traceTarget) sections.push(`## Trace Target\n${traceTarget}`);
+      if (sections.length > 1) return sections.join('\n\n');
+    }
+
+    const subjectId = this.currentSubjectProfile?.id || 'default';
+    return runFormatQuestionScript(subjectId, {
+      questionText: rawQuestion,
+      questionType: normalizedType,
+      metadata,
+    });
   }
 
   private deriveRequirements(content: any, questionData: any): string[] {
@@ -203,6 +366,25 @@ export class ContentFormatterSkill extends BaseSkill {
 
     try {
       const { content, moduleType, includeMetadata } = input;
+      const candidateProfile = (input as any)?.subjectProfile;
+      const questionMeta =
+        (input as any)?.content?.question?.metadata ||
+        (input as any)?.content?.metadata ||
+        {};
+      const subjectFromQuestion =
+        typeof questionMeta?.subject_skill_id === 'string' ? questionMeta.subject_skill_id : '';
+
+      if (candidateProfile && typeof candidateProfile === 'object' && typeof candidateProfile.id === 'string') {
+        this.currentSubjectProfile = candidateProfile as SubjectProfile;
+      } else {
+        const subjectHint =
+          subjectFromQuestion ||
+          (typeof (input as any)?.subjectId === 'string' && (input as any).subjectId) ||
+          (typeof context?.subject === 'string' && context.subject) ||
+          '';
+        this.currentSubjectProfile = loadSubjectProfile(subjectHint || undefined);
+      }
+      this.log('info', `Content formatter subject profile: ${this.currentSubjectProfile.id}`);
       
       // Debug log for troubleshooting
       this.log('info', `Content formatter input:`, {
@@ -358,7 +540,7 @@ export class ContentFormatterSkill extends BaseSkill {
     return {
       concept_name: content.concept || questionData?.metadata?.key_concepts?.[0] || 'Concept',
       format: content.type || questionData?.type || content.questionType || 'coding',
-      question: questionText,
+      question: this.formatQuestionForDisplay(content.type || questionData?.type || content.questionType, questionText, questionData),
       options, // Add options for multiple choice
       solution: solutionText,
       solution_explanation: solutionExplanation,
@@ -431,7 +613,7 @@ export class ContentFormatterSkill extends BaseSkill {
       title: labTitle,
       title_secondary: content.title_secondary || '',
       problem_type: content.type || content.questionType || 'coding',
-      description: descriptionText || content.description || '',
+      description: this.formatQuestionForDisplay(content.type || content.questionType || questionData?.type, descriptionText || content.description || '', questionData),
       description_secondary: content.description_secondary || content.question_secondary || '',
       options, // Add options for multiple choice
       requirements: labRequirements,
@@ -503,7 +685,7 @@ export class ContentFormatterSkill extends BaseSkill {
       title: content.title || conceptTitle,
       title_secondary: content.title_secondary || '',
       question_type: content.type || content.questionType || 'coding',
-      description: descriptionText || content.description || '',
+      description: this.formatQuestionForDisplay(content.type || content.questionType || content.question?.type, descriptionText || content.description || '', content.question),
       description_secondary: content.description_secondary || content.question_secondary || '',
       options, // Add options for multiple choice
       requirements: homeworkRequirements,
@@ -586,7 +768,7 @@ export class ContentFormatterSkill extends BaseSkill {
     }
 
     return {
-      question: questionText || content.question || '',
+      question: this.formatQuestionForDisplay(content.type || content.questionType || content.question?.type, questionText || content.question || '', content.question),
       question_secondary: content.question_secondary || '',
       type: content.type || content.questionType || 'coding',
       title: examTitle,

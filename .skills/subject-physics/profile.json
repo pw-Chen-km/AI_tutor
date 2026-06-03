@@ -1,0 +1,64 @@
+{
+  "id": "physics",
+  "label": "Physics",
+  "aliases": [
+    "physics",
+    "mechanics",
+    "kinematics",
+    "dynamics",
+    "electromagnetism",
+    "optics",
+    "thermodynamics",
+    "waves",
+    "modern physics",
+    "quantum",
+    "relativity",
+    "物理",
+    "力學",
+    "電磁學",
+    "熱力學"
+  ],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "calculation",
+    "derivation"
+  ],
+  "preferredQuestionTypes": [
+    "calculation",
+    "derivation",
+    "multiple_choice",
+    "short_answer"
+  ],
+  "sectionLabels": [
+    "Scenario",
+    "Given Data",
+    "Diagram Description",
+    "Assumptions",
+    "Required",
+    "Units",
+    "Question",
+    "Physical Principle"
+  ],
+  "questionShapes": {
+    "calculation": "QUESTION SHAPE (Physics / calculation):\n- Output: ## Scenario, ## Given Data, ## Assumptions, ## Required.\n- ## Given Data: each quantity with symbol, value, and SI unit.\n- ## Assumptions: idealizations (frictionless, point mass, uniform field).\n- ## Required: numeric answer with units and significant figures rule.",
+    "derivation": "QUESTION SHAPE (Physics / derivation):\n- Output: ## Problem, ## Given, ## Physical Principle, ## Required.\n- Derive a formula or show equivalence starting from laws named in the source.",
+    "short_answer": "QUESTION SHAPE (Physics / short_answer):\n- Output: ## Scenario, ## Question, ## Required.\n- Ask one qualitative reasoning prompt tied to one named principle (e.g., conservation of energy, Lenz's law).\n- ## Required should bound length (1-3 sentences).",
+    "multiple_choice": "QUESTION SHAPE (Physics / multiple_choice):\n- Stem includes setup; options test one concept (direction, sign, law choice)."
+  },
+  "formatting": {
+    "codeLanguage": null,
+    "preferCodeFences": false,
+    "exampleStyle": "physical",
+    "wrapExampleInCode": false,
+    "unitsRequired": true
+  },
+  "promptAddendum": "You are generating questions for a physics course. Always include units and coordinate conventions. State idealizations explicitly. Use plain text for equations, not code fences. Answers must be checkable from given data and laws taught in the source.",
+  "structuredExamples": [
+    {
+      "type": "calculation",
+      "question": "## Scenario\nA block slides down a frictionless incline.\n\n## Given Data\n- Mass m = 2.0 kg\n- Incline angle θ = 30°\n- g = 9.8 m/s²\n\n## Assumptions\n- No air resistance; take down the slope as positive\n\n## Required\nFind the acceleration along the incline in m/s² (2 significant figures)."
+    }
+  ]
+}

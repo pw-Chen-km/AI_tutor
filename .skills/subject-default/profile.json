@@ -1,0 +1,41 @@
+{
+  "id": "default",
+  "label": "Generic",
+  "aliases": ["general", "default", "mixed", "interdisciplinary"],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "calculation",
+    "proof",
+    "derivation",
+    "coding",
+    "debugging",
+    "trace",
+    "design",
+    "data_analysis",
+    "case_study"
+  ],
+  "preferredQuestionTypes": [
+    "multiple_choice",
+    "short_answer",
+    "fill_in_blank"
+  ],
+  "sectionLabels": [
+    "Task",
+    "Context",
+    "Question",
+    "Expected Answer",
+    "Example",
+    "Requirements"
+  ],
+  "questionShapes": {},
+  "formatting": {
+    "codeLanguage": null,
+    "preferCodeFences": false,
+    "exampleStyle": "neutral",
+    "wrapExampleInCode": false
+  },
+  "promptAddendum": "You are generating educational questions. Adapt to whatever the source material describes; do not impose a programming, language, or finance frame onto neutral content. Use the section labels above when the question benefits from short structured chunks rather than one long paragraph.",
+  "structuredExamples": []
+}

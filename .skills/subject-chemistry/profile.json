@@ -1,0 +1,64 @@
+{
+  "id": "chemistry",
+  "label": "Chemistry",
+  "aliases": [
+    "chemistry",
+    "general chemistry",
+    "organic chemistry",
+    "inorganic chemistry",
+    "biochemistry",
+    "stoichiometry",
+    "thermochemistry",
+    "equilibrium",
+    "acid base",
+    "electrochemistry",
+    "化學",
+    "有機化學",
+    "無機化學",
+    "滴定",
+    "莫耳"
+  ],
+  "supportedQuestionTypes": [
+    "multiple_choice",
+    "fill_in_blank",
+    "short_answer",
+    "calculation",
+    "data_analysis"
+  ],
+  "preferredQuestionTypes": [
+    "calculation",
+    "multiple_choice",
+    "short_answer",
+    "data_analysis"
+  ],
+  "sectionLabels": [
+    "Scenario",
+    "Given Data",
+    "Balanced Equation",
+    "Assumptions",
+    "Required",
+    "Reaction Conditions",
+    "Question",
+    "Lab Data"
+  ],
+  "questionShapes": {
+    "calculation": "QUESTION SHAPE (Chemistry / calculation):\n- Output: ## Scenario, ## Given Data, ## Balanced Equation (if applicable), ## Assumptions, ## Required.\n- Include molar masses only if not provided as a table in source.\n- ## Required: amount with unit (mol, g, M, pH, etc.) and rounding.",
+    "data_analysis": "QUESTION SHAPE (Chemistry / data_analysis):\n- Output: ## Scenario, ## Lab Data (markdown table), ## Required.\n- Ask for trend, unknown concentration, or comparison — one task only.",
+    "short_answer": "QUESTION SHAPE (Chemistry / short_answer):\n- Output: ## Scenario, ## Question, ## Required.\n- Ask for one mechanism/concept explanation in 1-3 sentences.\n- Keep scope to one reaction condition or one principle.",
+    "multiple_choice": "QUESTION SHAPE (Chemistry / multiple_choice):\n- Test nomenclature, mechanism step, or safety/concept from source; 4 parallel options."
+  },
+  "formatting": {
+    "codeLanguage": null,
+    "preferCodeFences": false,
+    "exampleStyle": "chemical",
+    "wrapExampleInCode": false,
+    "useMarkdownTables": true
+  },
+  "promptAddendum": "You are generating questions for a chemistry course. State physical states, conditions (T, P), and significant figures. Use balanced equations when stoichiometry applies. Never use code fences for chemical formulas — plain text or subscripts (H2O) are fine. Lab questions must include all data needed in ## Lab Data.",
+  "structuredExamples": [
+    {
+      "type": "calculation",
+      "question": "## Scenario\nDetermine the mass of product formed from a limiting reagent reaction.\n\n## Given Data\n- Mass of NaOH: 4.0 g\n- Molar mass NaOH: 40.0 g/mol\n- Molar mass NaCl: 58.5 g/mol\n\n## Balanced Equation\nNaOH + HCl → NaCl + H2O (1:1:1:1)\n\n## Assumptions\n- HCl is in excess; 100% yield\n\n## Required\nMass of NaCl produced (g), 2 significant figures."
+    }
+  ]
+}
