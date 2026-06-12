@@ -8,6 +8,8 @@ import promptTemplates from '@/lib/llm/prompt-templates.json';
 import { extractSlidesFromPptx } from '@/lib/parsers/pptx';
 import { gatherWebSources as gatherWebSourcesShared } from '@/lib/web-search/web-search';
 import { PDFDocument } from 'pdf-lib';
+import { getRequiredPlatformLLMConfig } from '@/lib/llm/platform';
+import { logServerError, publicErrorMessage } from '@/lib/server/api';
 
 export const runtime = 'nodejs';
 
@@ -1879,12 +1881,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const apiKey = (body?.apiKey || '').toString();
-    const baseURL = (body?.baseURL || '').toString();
-    const model = (body?.model || '').toString();
-    const provider = (body?.provider || 'openai').toString();
-    const apiKeys = body?.apiKeys as Record<string, string> | undefined;
-    const providerModels = body?.providerModels as Record<string, string> | undefined;
+    const platformLLM = getRequiredPlatformLLMConfig();
     const primaryLanguage = (body?.primaryLanguage || 'English').toString();
     const secondaryLanguage = (body?.secondaryLanguage || 'none').toString();
     const includeWebResources = Boolean(body?.includeWebResources);
@@ -1895,30 +1892,13 @@ export async function POST(req: NextRequest) {
     const pptxFiles = Array.isArray(body?.pptxFiles) ? body.pptxFiles : [];
     const pptxFileContexts = Array.isArray(body?.pptxFileContexts) ? body.pptxFileContexts : [];
 
-    // Build LLM pool for parallel processing with multiple providers
-    const llmPool = buildLLMPool(apiKeys, provider, baseURL, model, providerModels);
-    const hasMultipleLLMs = llmPool.length > 1;
-    
-    // If we have a pool but apiKey is empty, use the first pool entry as default
-    // This ensures sequential processing works even when apiKey comes from apiKeys object
-    let effectiveApiKey = apiKey;
-    let effectiveBaseURL = baseURL;
-    let effectiveModel = model;
-    
-    if (!effectiveApiKey && llmPool.length > 0) {
-      const defaultConfig = llmPool[0];
-      effectiveApiKey = defaultConfig.apiKey;
-      effectiveBaseURL = defaultConfig.baseURL;
-      effectiveModel = defaultConfig.model;
-      console.log(`[Lecture Rehearsal] Using ${defaultConfig.provider} as default LLM provider`);
-    }
-    
-    // Log available LLM providers
-    if (hasMultipleLLMs) {
-      console.log(`[Lecture Rehearsal] Multiple LLM providers available: ${llmPool.map(p => p.provider).join(', ')}`);
-    }
+    const llmPool: LLMProviderConfig[] = [platformLLM];
+    const hasMultipleLLMs = false;
+    const effectiveApiKey = platformLLM.apiKey;
+    const effectiveBaseURL = platformLLM.baseURL;
+    const effectiveModel = platformLLM.model;
+    const provider = platformLLM.provider;
 
-    if (!effectiveApiKey && llmPool.length === 0) return NextResponse.json({ error: 'API Key is missing' }, { status: 400 });
     if (!context.trim()) return NextResponse.json({ error: 'Context is empty' }, { status: 400 });
     
     let totalTokensUsed = 0;
@@ -2267,10 +2247,9 @@ Rules:
           try {
             const inputTokens = Math.round(totalTokensUsed * 0.6);
             const outputTokens = Math.round(totalTokensUsed * 0.4);
-            await recordUsage(session.user.id, 'lecture_rehearsal', inputTokens, outputTokens, model || 'unknown');
-            console.log(`[lecture-rehearsal] Recorded ${totalTokensUsed} tokens (multi-file, input: ${inputTokens}, output: ${outputTokens})`);
+            await recordUsage(session.user.id, 'lecture_rehearsal', inputTokens, outputTokens, effectiveModel || 'unknown');
           } catch (usageError: any) {
-            console.error('[lecture-rehearsal] Failed to record token usage:', usageError);
+            logServerError('[lecture-rehearsal] Failed to record token usage:', usageError);
           }
         }
         return NextResponse.json({ results });
@@ -2280,10 +2259,9 @@ Rules:
           try {
             const inputTokens = Math.round(totalTokensUsed * 0.6);
             const outputTokens = Math.round(totalTokensUsed * 0.4);
-            await recordUsage(session.user.id, 'lecture_rehearsal', inputTokens, outputTokens, model || 'unknown');
-            console.log(`[lecture-rehearsal] Recorded ${totalTokensUsed} tokens (multi-file single result, input: ${inputTokens}, output: ${outputTokens})`);
+            await recordUsage(session.user.id, 'lecture_rehearsal', inputTokens, outputTokens, effectiveModel || 'unknown');
           } catch (usageError: any) {
-            console.error('[lecture-rehearsal] Failed to record token usage:', usageError);
+            logServerError('[lecture-rehearsal] Failed to record token usage:', usageError);
           }
         }
         return NextResponse.json(results[0]);
@@ -2312,7 +2290,7 @@ Rules:
             isCover: Number(s.slideNum) === 1 && (s.textLen || 0) < 30,
           }));
         } catch (e) {
-          console.error('extractSlidesFromPptx (single) failed:', e);
+          logServerError('extractSlidesFromPptx (single) failed:', e);
         }
       }
     } else if (pptxBase64) {
@@ -2329,7 +2307,7 @@ Rules:
           isCover: Number(s.slideNum) === 1 && (s.textLen || 0) < 30,
         }));
       } catch (e) {
-        console.error('extractSlidesFromPptx failed:', e);
+        logServerError('extractSlidesFromPptx failed:', e);
       }
     } else if (pdfBlocks.length === 1) {
       const pdf = pdfBlocks[0];
@@ -2517,13 +2495,11 @@ Rules:
         'lecture_rehearsal',
         inputTokens,
         outputTokens,
-        model || 'unknown'
+        effectiveModel || 'unknown'
       );
-      
-      console.log(`[lecture-rehearsal] Recorded ${totalTokensUsed} tokens (input: ${inputTokens}, output: ${outputTokens})`);
     } catch (usageError: any) {
       // Don't fail the request if usage recording fails
-      console.error('[lecture-rehearsal] Failed to record token usage:', usageError);
+      logServerError('[lecture-rehearsal] Failed to record token usage:', usageError);
     }
 
     return NextResponse.json({
@@ -2534,7 +2510,7 @@ Rules:
       web_sources,
     });
   } catch (e: any) {
-    console.error('Lecture rehearsal API error:', e);
-    return NextResponse.json({ error: e?.message || 'Lecture rehearsal failed' }, { status: 500 });
+    logServerError('Lecture rehearsal API error:', e);
+    return NextResponse.json({ error: publicErrorMessage(e, 'Lecture rehearsal failed') }, { status: 500 });
   }
 }

@@ -8,6 +8,37 @@ import { Upload, File, X, FileText, FileSpreadsheet, FolderOpen, Globe, Graduati
 import { useCallback, useState, useEffect } from 'react';
 import { parseFileDetailed, parseFileForEvaluation } from '@/lib/parsers/file-parser';
 
+type ExtractedArchiveFile = {
+    name: string;
+    path: string;
+    fileType: string;
+    content: string;
+    size: number;
+    strategy?: string;
+    warnings?: string[];
+    metadata?: Record<string, any>;
+};
+
+type ExtractedStudentGroup = {
+    studentId: string;
+    studentName: string;
+    files: ExtractedArchiveFile[];
+    content: string;
+    warnings?: string[];
+};
+
+type ExtractArchiveResponse = {
+    success?: boolean;
+    role?: 'teacher' | 'student';
+    files?: ExtractedArchiveFile[];
+    studentGroups?: ExtractedStudentGroup[];
+    totalFiles?: number;
+    totalStudents?: number;
+    warnings?: string[];
+    error?: string;
+    suggestion?: string;
+};
+
 // File upload zone component
 function FileUploadZone({
     id,
@@ -200,6 +231,11 @@ export function ContextPanel() {
     const [subscriptionLoading, setSubscriptionLoading] = useState(true);
     const [webUrlInput, setWebUrlInput] = useState('');
     const [webFetchLoading, setWebFetchLoading] = useState(false);
+    const [panelMessage, setPanelMessage] = useState<{ type: 'success' | 'warning' | 'error'; text: string } | null>(null);
+
+    const showPanelMessage = useCallback((type: 'success' | 'warning' | 'error', text: string) => {
+        setPanelMessage({ type, text });
+    }, []);
 
     // Check subscription plan for web search access
     useEffect(() => {
@@ -243,6 +279,43 @@ export function ContextPanel() {
             binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
         }
         return btoa(binary);
+    };
+
+    const extractArchive = useCallback(async (file: File, role: 'teacher' | 'student'): Promise<ExtractArchiveResponse> => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('role', role);
+        formData.append('llmConfig', JSON.stringify(llmConfig));
+
+        const response = await fetch('/api/extract-archive', {
+            method: 'POST',
+            body: formData,
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data?.error || data?.suggestion || `Failed to extract archive (status: ${response.status})`);
+        }
+        return data;
+    }, [llmConfig]);
+
+    const buildArchiveFileSection = (file: ExtractedArchiveFile) => {
+        const warnings = Array.isArray(file.warnings) && file.warnings.length > 0
+            ? `\n[READING WARNINGS]\n${file.warnings.join('\n')}`
+            : '';
+        return `[SOURCE FILE: ${file.path || file.name}]\n${file.content || '[NO READABLE CONTENT]'}${warnings}`;
+    };
+
+    const buildTeacherArchiveContent = (archiveName: string, files: ExtractedArchiveFile[], warnings: string[] = []) => {
+        const archiveWarnings = warnings.length > 0
+            ? `\n\n[ARCHIVE WARNINGS]\n${warnings.join('\n')}`
+            : '';
+        return [
+            `ARCHIVE: ${archiveName}`,
+            archiveWarnings,
+            '',
+            files.map(buildArchiveFileSection).join('\n\n---\n\n'),
+        ].join('\n').trim();
     };
 
     const refineOutlineForUpload = useCallback(async (params: {
@@ -428,16 +501,16 @@ export function ContextPanel() {
                 }
             }
             if (rejected.length > 0) {
-                alert(`Unsupported file type for Lecture Rehearsal: ${rejected.join(', ')}`);
+                showPanelMessage('warning', `Unsupported file type for Lecture Rehearsal: ${rejected.join(', ')}`);
             }
         } catch (error: any) {
             console.error('Error uploading files:', error);
             const message = error?.message || 'Unknown error occurred';
-            alert(`Error uploading file: ${message}`);
+            showPanelMessage('error', `Error uploading file: ${message}`);
         } finally {
             setUploading(false);
         }
-    }, [addContextFile, detectSubjectForUpload, isLectureRehearsal, llmConfig, mapSkillSubjectToUiSubject, refineOutlineForUpload, setSubject, subject]);
+    }, [addContextFile, detectSubjectForUpload, isLectureRehearsal, llmConfig, mapSkillSubjectToUiSubject, refineOutlineForUpload, setSubject, showPanelMessage, subject]);
 
     const handleAddWebUrl = useCallback(async () => {
         const url = webUrlInput.trim();
@@ -467,19 +540,75 @@ export function ContextPanel() {
             });
             setWebUrlInput('');
         } catch (error: any) {
-            alert(`Fetch webpage error: ${error?.message || 'Unknown error'}`);
+            showPanelMessage('error', `Fetch webpage error: ${error?.message || 'Unknown error'}`);
         } finally {
             setWebFetchLoading(false);
         }
-    }, [webUrlInput, addContextFile]);
+    }, [webUrlInput, addContextFile, showPanelMessage]);
 
     // Teacher file upload handler (for Exam Evaluation)
     const handleTeacherFileUpload = useCallback(async (files: FileList | null) => {
         if (!files || files.length === 0) return;
 
+        setUploading(true);
         try {
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
+                const fileType = file.name.split('.').pop()?.toLowerCase();
+
+                if (fileType === 'zip' || fileType === 'rar') {
+                    try {
+                        const data = await extractArchive(file, 'teacher');
+                        const extractedFiles = data.files || [];
+                        if (data.success && extractedFiles.length > 0) {
+                            const archiveContent = buildTeacherArchiveContent(file.name, extractedFiles, data.warnings || []);
+                            addTeacherFile({
+                                id: Math.random().toString(36).substring(7),
+                                name: file.name,
+                                type: 'zip',
+                                content: archiveContent,
+                                intake: {
+                                    fileName: file.name,
+                                    fileType: 'zip',
+                                    intent: 'evaluate_student_answer',
+                                    content: archiveContent,
+                                    strategy: 'archive.teacher-merged',
+                                    pages: extractedFiles.map((extractedFile, index) => ({
+                                        pageNumber: index + 1,
+                                        text: extractedFile.content,
+                                        textLen: extractedFile.content.length,
+                                        features: {
+                                            sourcePath: extractedFile.path,
+                                            fileType: extractedFile.fileType,
+                                            strategy: extractedFile.strategy,
+                                        },
+                                    })),
+                                    warnings: [
+                                        ...(data.warnings || []),
+                                        ...extractedFiles.flatMap((extractedFile) =>
+                                            (extractedFile.warnings || []).map((warning) => `${extractedFile.path}: ${warning}`)
+                                        ),
+                                    ],
+                                    metadata: {
+                                        archiveRole: 'teacher',
+                                        totalFiles: extractedFiles.length,
+                                        sourceFiles: extractedFiles.map((extractedFile) => extractedFile.path),
+                                    },
+                                },
+                                rawBase64: undefined,
+                                uploadedAt: new Date(),
+                            });
+                            showPanelMessage('success', `Successfully extracted ${extractedFiles.length} teacher file(s) from ${file.name}`);
+                            continue;
+                        }
+                        throw new Error(data.error || 'Failed to extract archive');
+                    } catch (extractError: any) {
+                        console.error('Error extracting teacher archive:', extractError);
+                        showPanelMessage('error', `無法解壓縮 ${file.name}:\n${extractError?.message || 'Unknown error'}`);
+                        continue;
+                    }
+                }
+
                 const content = await parseFileForEvaluation(file, { llmConfig });
                 const rawBase64 = arrayBufferToBase64(await file.arrayBuffer());
 
@@ -494,9 +623,11 @@ export function ContextPanel() {
             }
         } catch (error: any) {
             console.error('Error uploading teacher files:', error);
-            alert(`Error uploading file: ${error?.message || 'Unknown error'}`);
+            showPanelMessage('error', `Error uploading file: ${error?.message || 'Unknown error'}`);
+        } finally {
+            setUploading(false);
         }
-    }, [addTeacherFile, llmConfig]);
+    }, [addTeacherFile, extractArchive, llmConfig, showPanelMessage]);
 
     // Student file upload handler (for Exam Evaluation)
     const handleStudentFileUpload = useCallback(async (files: FileList | null) => {
@@ -510,38 +641,52 @@ export function ContextPanel() {
 
                 // Check if it's a ZIP or RAR archive
                 if (fileType === 'zip' || fileType === 'rar') {
-                    // Extract archive and add each file as a separate student
-                    const formData = new FormData();
-                    formData.append('file', file);
-
                     try {
-                        const response = await fetch('/api/extract-archive', {
-                            method: 'POST',
-                            body: formData,
-                        });
-
-                        if (!response.ok) {
-                            const errorData = await response.json().catch(() => ({}));
-                            throw new Error(errorData.error || `Failed to extract archive (status: ${response.status})`);
-                        }
-
-                        const data = await response.json();
+                        const data = await extractArchive(file, 'student');
                         
-                        if (data.success && data.files && data.files.length > 0) {
+                        if (data.success && Array.isArray(data.studentGroups) && data.studentGroups.length > 0) {
                             let addedCount = 0;
-                            const skippedFiles: string[] = [];
                             
-                            // Add each extracted file as a separate student file
-                            for (const extractedFile of data.files) {
-                                // Don't skip any files - add all of them
-                                // Images, errors, and other files should all be added
-                                // The evaluation API will handle different file types appropriately
+                            // Add each grouped submission as a single student.
+                            for (const group of data.studentGroups) {
+                                const sourceFiles = group.files || [];
+                                const warnings = [
+                                    ...(group.warnings || []),
+                                    ...sourceFiles.flatMap((sourceFile) =>
+                                        (sourceFile.warnings || []).map((warning) => `${sourceFile.path}: ${warning}`)
+                                    ),
+                                ];
                                 
                                 addStudentFile({
                                     id: Math.random().toString(36).substring(7),
-                                    name: extractedFile.name,
-                                    type: extractedFile.name.split('.').pop() || 'unknown',
-                                    content: extractedFile.content,
+                                    name: group.studentName || group.studentId || `Student ${addedCount + 1}`,
+                                    type: 'student_submission_group',
+                                    content: group.content,
+                                    intake: {
+                                        fileName: group.studentName || group.studentId || `Student ${addedCount + 1}`,
+                                        fileType: 'student_submission_group',
+                                        intent: 'evaluate_student_answer',
+                                        content: group.content,
+                                        strategy: 'archive.student-grouped',
+                                        pages: sourceFiles.map((sourceFile, index) => ({
+                                            pageNumber: index + 1,
+                                            text: sourceFile.content,
+                                            textLen: sourceFile.content.length,
+                                            features: {
+                                                sourcePath: sourceFile.path,
+                                                fileType: sourceFile.fileType,
+                                                strategy: sourceFile.strategy,
+                                            },
+                                        })),
+                                        warnings,
+                                        metadata: {
+                                            archiveRole: 'student',
+                                            archiveName: file.name,
+                                            studentId: group.studentId,
+                                            studentName: group.studentName,
+                                            sourceFiles: sourceFiles.map((sourceFile) => sourceFile.path),
+                                        },
+                                    },
                                     rawBase64: undefined, // Extracted files don't have rawBase64
                                     uploadedAt: new Date(),
                                 });
@@ -549,14 +694,28 @@ export function ContextPanel() {
                             }
                             
                             // Show success message with details
-                            let message = `Successfully extracted ${addedCount} file(s) from ${file.name}`;
-                            if (skippedFiles.length > 0) {
-                                message += `\n\nSkipped ${skippedFiles.length} binary/error file(s):\n${skippedFiles.slice(0, 5).join(', ')}${skippedFiles.length > 5 ? '...' : ''}`;
+                            let message = `Successfully extracted ${data.totalFiles || 0} file(s) and grouped ${addedCount} student(s) from ${file.name}`;
+                            if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+                                message += `\n\nWarnings:\n${data.warnings.slice(0, 5).join('\n')}${data.warnings.length > 5 ? '\n...' : ''}`;
                             }
-                            alert(message);
+                            showPanelMessage(data.warnings?.length ? 'warning' : 'success', message);
                             
                             // Don't add the ZIP file itself - only the extracted files
                             continue; // Skip adding the ZIP file
+                        } else if (data.success && Array.isArray(data.files) && data.files.length > 0) {
+                            // Fallback for archives that could not be grouped.
+                            for (const extractedFile of data.files) {
+                                addStudentFile({
+                                    id: Math.random().toString(36).substring(7),
+                                    name: extractedFile.name,
+                                    type: extractedFile.fileType || extractedFile.name.split('.').pop() || 'unknown',
+                                    content: buildArchiveFileSection(extractedFile),
+                                    rawBase64: undefined,
+                                    uploadedAt: new Date(),
+                                });
+                            }
+                            showPanelMessage('success', `Successfully extracted ${data.files.length} file(s) from ${file.name}`);
+                            continue;
                         } else {
                             throw new Error(data.error || 'Failed to extract archive');
                         }
@@ -570,7 +729,7 @@ export function ContextPanel() {
                             errorMessage = `RAR 格式目前不支援自動解壓縮。\n\n建議解決方案：\n1. 將 RAR 檔案轉換為 ZIP 格式\n2. 或手動解壓縮後上傳個別檔案\n\n您可以使用線上工具（如 CloudConvert）或系統工具來轉換格式。`;
                         }
                         
-                        alert(`無法解壓縮 ${file.name}:\n${errorMessage}${errorData.suggestion ? '\n\n' + errorData.suggestion : ''}`);
+                        showPanelMessage('error', `無法解壓縮 ${file.name}:\n${errorMessage}${errorData.suggestion ? '\n\n' + errorData.suggestion : ''}`);
                         
                         // Don't add the archive file if extraction failed
                         continue; // Skip adding the failed archive
@@ -592,11 +751,11 @@ export function ContextPanel() {
             }
         } catch (error: any) {
             console.error('Error uploading student files:', error);
-            alert(`Error uploading file: ${error?.message || 'Unknown error'}`);
+            showPanelMessage('error', `Error uploading file: ${error?.message || 'Unknown error'}`);
         } finally {
             setUploading(false);
         }
-    }, [addStudentFile, llmConfig]);
+    }, [addStudentFile, extractArchive, llmConfig, showPanelMessage]);
 
     const handleDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -634,6 +793,20 @@ export function ContextPanel() {
         return 'text-primary';
     };
 
+    const panelMessageNode = panelMessage ? (
+        <div
+            className={`mx-4 mt-4 rounded-md border px-3 py-2 text-xs whitespace-pre-wrap ${
+                panelMessage.type === 'success'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200'
+                    : panelMessage.type === 'warning'
+                        ? 'border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-900 dark:bg-orange-950/30 dark:text-orange-200'
+                        : 'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200'
+            }`}
+        >
+            {panelMessage.text}
+        </div>
+    ) : null;
+
     // Exam Evaluation mode - dual zone layout
     if (isExamEvaluation) {
         return (
@@ -652,6 +825,8 @@ export function ContextPanel() {
                         </div>
                     </div>
                 </div>
+
+                {panelMessageNode}
 
                 {/* Teacher Section (Upper Half) */}
                 <div className="flex-1 border-b border-border overflow-hidden">
@@ -707,6 +882,8 @@ export function ContextPanel() {
                     </div>
                 </div>
             </div>
+
+            {panelMessageNode}
 
             {/* Upload Area */}
             <div className="p-4">
@@ -772,7 +949,7 @@ export function ContextPanel() {
                     <button
                         onClick={() => {
                             if (!hasWebSearchAccess) {
-                                alert('Web Search is only available for Pro and Premium plans. Please upgrade your subscription.');
+                                showPanelMessage('warning', 'Web Search is only available for Pro and Premium plans. Please upgrade your subscription.');
                                 return;
                             }
                             setIncludeWebResources(!includeWebResources);

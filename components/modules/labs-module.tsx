@@ -26,7 +26,6 @@ import { CodeBlock } from '@/components/shared/code-block';
 import { MixedContent } from '@/components/shared/mixed-content';
 import { VariantSelector } from '@/components/shared/variant-selector';
 import { SourceSelector } from '@/components/shared/source-selector';
-import { getActiveLLMConfig } from '@/lib/llm/config';
 
 // Helper function to check if a problem type is coding-related
 function isCodingType(format: string | undefined): boolean {
@@ -67,7 +66,7 @@ interface Lab {
 }
 
 export function LabsModule() {
-    const { contextFiles, llmConfig, languageConfig, subject, generatedContent, setGeneratedContent, variants, addVariant, removeVariant, reorderVariants, customQuestionTypes, includeWebResources } = useStore();
+    const { contextFiles, languageConfig, subject, generatedContent, setGeneratedContent, variants, addVariant, removeVariant, reorderVariants, customQuestionTypes, includeWebResources } = useStore();
     const [loading, setLoading] = useState(false);
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
     const [showSolution, setShowSolution] = useState<Record<number, boolean>>({});
@@ -77,7 +76,7 @@ export function LabsModule() {
     const [progress, setProgress] = useState<{ current: number; total: number; message: string } | null>(null);
     const [numberOfProblems, setNumberOfProblems] = useState(5);
     const [minutesPerProblem, setMinutesPerProblem] = useState(30);
-    const [debugAllowFallback, setDebugAllowFallback] = useState<boolean>(false);
+    const debugAllowFallback = false;
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
     const [selectedVariants, setSelectedVariants] = useState<Record<string, string[]>>({});
     const [displayedVariant, setDisplayedVariant] = useState<Record<string, string>>({});
@@ -98,7 +97,6 @@ export function LabsModule() {
     );
     const primaryLanguage = languageConfig?.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
-    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
     const detectedSubject = useMemo(() => resolveDetectedUiSubjectFromContextFiles(contextFiles), [contextFiles]);
     const subjectDetectionDone = useMemo(
@@ -164,10 +162,6 @@ export function LabsModule() {
         setDisplayedVariant(prev => ({ ...prev, [itemId]: variantId }));
     };
     const handleGenerateSimilar = async (index: number) => {
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key first.');
-            return;
-        }
         const itemId = getItemId(index);
         setGeneratingSimilar(prev => ({ ...prev, [itemId]: true }));
         try {
@@ -178,11 +172,6 @@ export function LabsModule() {
                 body: JSON.stringify({
                     originalItem: originalLab,
                     moduleType: 'labs',
-                    llmConfig: {
-                        apiKey: activeLLMConfig.apiKey,
-                        baseURL: activeLLMConfig.baseURL,
-                        model: activeLLMConfig.model,
-                    },
                     primaryLanguage,
                     secondaryLanguage,
                 }),
@@ -285,11 +274,6 @@ export function LabsModule() {
             return;
         }
 
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key in the settings.');
-            return;
-        }
-
         setLoading(true);
         setProgress({ current: 0, total: numberOfProblems, message: 'Starting...' });
         try {
@@ -310,7 +294,6 @@ export function LabsModule() {
                         sourceDocuments,
                         debugAllowFallback,
                     },
-                    llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
                     subject,
                     includeWebResources: includeWebResources || false,
@@ -425,7 +408,6 @@ export function LabsModule() {
 
     const handleRegenerate = async (index: number) => {
         if (contextFiles.length === 0) return;
-        if (!activeLLMConfig.apiKey) return;
         const target = safeLabs[index];
         if (!target) return;
 
@@ -450,7 +432,6 @@ export function LabsModule() {
                         sourceDocuments,
                         debugAllowFallback,
                     },
-                    llmConfig: activeLLMConfig,
                     languageConfig: {
                         primaryLanguage,
                         secondaryLanguage,
@@ -510,7 +491,6 @@ export function LabsModule() {
                                     sourceDocuments,
                                     debugAllowFallback,
                                 },
-                                llmConfig: activeLLMConfig,
                                 languageConfig: {
                                     primaryLanguage,
                                     secondaryLanguage,
@@ -613,17 +593,6 @@ export function LabsModule() {
                                 value={minutesPerProblem}
                                 onChange={(e) => setMinutesPerProblem(parseInt(e.target.value) || 10)}
                             />
-                        </div>
-                        <div>
-                            <Label htmlFor="labs-debug-fallback">Debug: Allow Fallback</Label>
-                            <div className="h-10 flex items-center">
-                                <input
-                                    id="labs-debug-fallback"
-                                    type="checkbox"
-                                    checked={debugAllowFallback}
-                                    onChange={(e) => setDebugAllowFallback(e.target.checked)}
-                                />
-                            </div>
                         </div>
                     </div>
 
@@ -836,7 +805,6 @@ export function LabsModule() {
                                                                 sourceDocuments,
                                                                 debugAllowFallback,
                                                             },
-                                                            llmConfig: activeLLMConfig,
                                                             languageConfig: {
                                                                 primaryLanguage,
                                                                 secondaryLanguage,

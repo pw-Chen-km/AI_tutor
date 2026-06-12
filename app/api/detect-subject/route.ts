@@ -1,18 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getActiveLLMConfig } from '@/lib/llm/config';
+import { getPlatformLLMConfig } from '@/lib/llm/platform';
 import { skillRegistry } from '@/lib/llm/agent-skills/registry';
+import { requireUserSession, logServerError, publicErrorMessage } from '@/lib/server/api';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await requireUserSession();
+    if (auth.response) return auth.response;
+
     const body = await req.json();
     const {
       fileName,
       fileType,
       intake,
-      llmConfig: rawLLMConfig,
       languageConfig,
       subjectHint,
     } = body || {};
@@ -26,7 +29,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'subject_detector skill is unavailable' }, { status: 500 });
     }
 
-    const llmConfig = getActiveLLMConfig(rawLLMConfig);
+    const llmConfig = getPlatformLLMConfig();
     const skillContext = {
       llmConfig: {
         apiKey: llmConfig?.apiKey || '',
@@ -65,11 +68,10 @@ export async function POST(req: NextRequest) {
       detectedAt: new Date().toISOString(),
     });
   } catch (error: any) {
-    console.error('detect-subject API error:', error);
+    logServerError('detect-subject API error:', error);
     return NextResponse.json(
-      { error: error?.message || 'Failed to detect subject' },
+      { error: publicErrorMessage(error, 'Failed to detect subject') },
       { status: 500 }
     );
   }
 }
-

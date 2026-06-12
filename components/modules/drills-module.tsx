@@ -26,7 +26,6 @@ import { VariantSelector } from '@/components/shared/variant-selector';
 import { CodeBlock } from '@/components/shared/code-block';
 import { MixedContent } from '@/components/shared/mixed-content';
 import { SourceSelector } from '@/components/shared/source-selector';
-import { getActiveLLMConfig } from '@/lib/llm/config';
 
 interface Drill {
     number?: number;
@@ -65,7 +64,7 @@ function sanitizeMultipleChoiceOption(option: any): string {
 }
 
 export function DrillsModule() {
-    const { contextFiles, llmConfig, languageConfig, subject, generatedContent, setGeneratedContent, variants, addVariant, removeVariant, reorderVariants, customQuestionTypes } = useStore();
+    const { contextFiles, languageConfig, subject, generatedContent, setGeneratedContent, variants, addVariant, removeVariant, reorderVariants, customQuestionTypes, includeWebResources } = useStore();
     const [loading, setLoading] = useState(false);
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
     const [showSolution, setShowSolution] = useState<Record<number, boolean>>({});
@@ -75,13 +74,12 @@ export function DrillsModule() {
     const [progress, setProgress] = useState<{ current: number; total: number; message: string } | null>(null);
     const [numberOfQuestions, setNumberOfQuestions] = useState<number>(5);
     const [minutesPerProblem, setMinutesPerProblem] = useState<number>(8);
-    const [debugAllowFallback, setDebugAllowFallback] = useState<boolean>(false);
+    const debugAllowFallback = false;
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
     const [selectedVariants, setSelectedVariants] = useState<Record<string, string[]>>({});
     const [displayedVariant, setDisplayedVariant] = useState<Record<string, string>>({});
     const primaryLanguage = languageConfig.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig.secondaryLanguage || 'none';
-    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
     // Get variants for drills
     const drillVariants = variants?.drills || {};
@@ -158,12 +156,6 @@ export function DrillsModule() {
             return;
         }
 
-        const activeLLMConfig = getActiveLLMConfig(llmConfig);
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key in the settings.');
-            return;
-        }
-
         setLoading(true);
         setProgress({ current: 0, total: numberOfQuestions, message: 'Starting...' });
         try {
@@ -184,10 +176,9 @@ export function DrillsModule() {
                         sourceDocuments,
                         debugAllowFallback,
                     },
-                    llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
                     subject,
-                    includeWebResources: false,
+                    includeWebResources: includeWebResources || false,
                 }),
             });
 
@@ -334,8 +325,6 @@ export function DrillsModule() {
 
     const handleRegenerate = async (index: number) => {
         if (contextFiles.length === 0) return;
-        const activeLLMConfig = getActiveLLMConfig(llmConfig);
-        if (!activeLLMConfig.apiKey) return;
         const target = drills?.[index];
         if (!target) return;
 
@@ -358,7 +347,6 @@ export function DrillsModule() {
                         sourceDocuments,
                         debugAllowFallback,
                     },
-                    llmConfig: activeLLMConfig,
                     languageConfig: {
                         primaryLanguage,
                         secondaryLanguage,
@@ -451,7 +439,6 @@ export function DrillsModule() {
                                     sourceDocuments,
                                     debugAllowFallback,
                                 },
-                                llmConfig: activeLLMConfig,
                                 languageConfig: {
                                     primaryLanguage,
                                     secondaryLanguage,
@@ -485,12 +472,6 @@ export function DrillsModule() {
 
     // Generate similar question (variant)
     const handleGenerateSimilar = async (itemId: string, originalItem: any) => {
-        const activeLLMConfig = getActiveLLMConfig(llmConfig);
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key first.');
-            return;
-        }
-
         setGeneratingSimilar((s) => ({ ...s, [itemId]: true }));
         try {
             const response = await fetch('/api/similar-generate', {
@@ -499,11 +480,6 @@ export function DrillsModule() {
                 body: JSON.stringify({
                     originalItem,
                     moduleType: 'drills',
-                    llmConfig: {
-                        apiKey: activeLLMConfig.apiKey,
-                        baseURL: activeLLMConfig.baseURL,
-                        model: activeLLMConfig.model,
-                    },
                     primaryLanguage,
                     secondaryLanguage,
                 }),
@@ -652,18 +628,6 @@ export function DrillsModule() {
                                 onChange={(e) => setMinutesPerProblem(Math.max(1, Math.min(180, Number(e.target.value) || 1)))}
                             />
                         </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="drills-debug-fallback">Debug: Allow Fallback</Label>
-                            <div className="h-10 flex items-center">
-                                <input
-                                    id="drills-debug-fallback"
-                                    type="checkbox"
-                                    checked={debugAllowFallback}
-                                    onChange={(e) => setDebugAllowFallback(e.target.checked)}
-                                />
-                            </div>
-                        </div>
-
                     </div>
 
                     <div className="mb-4">
@@ -919,7 +883,6 @@ export function DrillsModule() {
                                                                 sourceDocuments,
                                                                 debugAllowFallback,
                                                             },
-                                                            llmConfig: activeLLMConfig,
                                                             languageConfig: {
                                                                 primaryLanguage,
                                                                 secondaryLanguage,

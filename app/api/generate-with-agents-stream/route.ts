@@ -15,7 +15,8 @@ import { gatherWebSources } from '@/lib/web-search/web-search';
 import { recordUsage } from '@/lib/payments/usage-tracker';
 import OpenAI from 'openai';
 import { jsonrepair } from 'jsonrepair';
-import { getActiveLLMConfig } from '@/lib/llm/config';
+import { getRequiredPlatformLLMConfig } from '@/lib/llm/platform';
+import { logServerError, publicErrorMessage } from '@/lib/server/api';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -117,15 +118,14 @@ export async function POST(req: NextRequest) {
           numberOfItems,
           context,
           taskParams,
-          llmConfig: rawLLMConfig,
           languageConfig,
           subject,
           includeWebResources,
         } = body;
-        const llmConfig = getActiveLLMConfig(rawLLMConfig);
+        const llmConfig = getRequiredPlatformLLMConfig();
 
-        if (!moduleType || !llmConfig?.apiKey) {
-          send(controller, { type: 'error', message: 'moduleType and LLM API key are required' });
+        if (!moduleType) {
+          send(controller, { type: 'error', message: 'moduleType is required' });
           controller.close();
           return;
         }
@@ -156,7 +156,7 @@ export async function POST(req: NextRequest) {
               });
             }
           } catch (e) {
-            console.error('Web search error:', e);
+            logServerError('Web search error:', e);
           }
         }
 
@@ -221,12 +221,16 @@ export async function POST(req: NextRequest) {
             const inputTokens = Math.round(totalTokensUsed * 0.6);
             const outputTokens = Math.round(totalTokensUsed * 0.4);
             await recordUsage(session.user.id, moduleType, inputTokens, outputTokens, llmConfig.model || 'unknown');
-            console.log(`[generate-with-agents-stream] Recorded ${totalTokensUsed} tokens (input: ${inputTokens}, output: ${outputTokens}) for ${moduleType}`);
+            if (process.env.NODE_ENV !== 'production') {
+              console.log(`[generate-with-agents-stream] Recorded ${totalTokensUsed} tokens (input: ${inputTokens}, output: ${outputTokens}) for ${moduleType}`);
+            }
           } else {
-            console.warn(`[generate-with-agents-stream] No tokens used reported (totalTokensUsed: ${totalTokensUsed})`);
+            if (process.env.NODE_ENV !== 'production') {
+              console.warn(`[generate-with-agents-stream] No tokens used reported (totalTokensUsed: ${totalTokensUsed})`);
+            }
           }
         } catch (e) {
-          console.error('[generate-with-agents-stream] Failed to record usage:', e);
+          logServerError('[generate-with-agents-stream] Failed to record usage:', e);
           // Don't throw - we still want to return results even if usage recording fails
         }
 
@@ -238,8 +242,8 @@ export async function POST(req: NextRequest) {
           stats: { generated: results.length, requested: numberOfItems, tokensUsed: totalTokensUsed },
         });
       } catch (err: any) {
-        console.error('[generate-with-agents-stream] Error:', err);
-        send(controller, { type: 'error', message: err?.message || 'Failed to generate content' });
+        logServerError('[generate-with-agents-stream] Error:', err);
+        send(controller, { type: 'error', message: publicErrorMessage(err, 'Failed to generate content') });
       } finally {
         controller.close();
       }

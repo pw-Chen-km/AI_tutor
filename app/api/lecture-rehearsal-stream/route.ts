@@ -5,6 +5,8 @@ import { recordUsage } from '@/lib/payments/usage-tracker';
 import { gatherWebSources as gatherWebSourcesShared } from '@/lib/web-search/web-search';
 import { intakeDocument, type DocumentIntakeResult } from '@/lib/document-intake';
 import promptTemplates from '@/lib/llm/prompt-templates.json';
+import { getRequiredPlatformLLMConfig } from '@/lib/llm/platform';
+import { logServerError, publicErrorMessage } from '@/lib/server/api';
 
 export const runtime = 'nodejs';
 
@@ -203,6 +205,15 @@ async function normalizeLectureDocuments(
 }
 
 export async function POST(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user?.id) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -212,14 +223,8 @@ export async function POST(req: NextRequest) {
       };
 
       try {
-        const session = await getServerSession(authOptions);
         const body = await req.json();
-        const apiKey = (body?.apiKey || '').toString();
-        const baseURL = (body?.baseURL || '').toString();
-        const model = (body?.model || '').toString();
-        const provider = (body?.provider || 'openai').toString();
-        const apiKeys = body?.apiKeys as Record<string, string> | undefined;
-        const providerModels = body?.providerModels as Record<string, string> | undefined;
+        const platformLLM = getRequiredPlatformLLMConfig();
         const primaryLanguage = (body?.primaryLanguage || 'English').toString();
         const secondaryLanguage = (body?.secondaryLanguage || 'none').toString();
         const includeWebResources = Boolean(body?.includeWebResources);
@@ -228,30 +233,15 @@ export async function POST(req: NextRequest) {
         const lectureDocumentsInput = Array.isArray(body?.lectureDocuments) ? body.lectureDocuments : [];
 
         const lectureRoute = await import('../lecture-rehearsal/route');
-        const buildLLMPool = (lectureRoute as any).buildLLMPool;
         const callLLMJson = (lectureRoute as any).callLLMJson;
         const buildSlideScriptsBatched = (lectureRoute as any).buildSlideScriptsBatched;
         const translateMarkdown = (lectureRoute as any).translateMarkdown;
 
-        const llmPool = buildLLMPool ? buildLLMPool(apiKeys, provider, baseURL, model, providerModels) : [];
-        let effectiveProvider = provider;
-        let effectiveApiKey = apiKey;
-        let effectiveBaseURL = baseURL;
-        let effectiveModel = model;
-
-        if (!effectiveApiKey && llmPool.length > 0) {
-          const defaultConfig = llmPool[0];
-          effectiveProvider = defaultConfig.provider;
-          effectiveApiKey = defaultConfig.apiKey;
-          effectiveBaseURL = defaultConfig.baseURL;
-          effectiveModel = defaultConfig.model;
-        }
-
-        if (!effectiveApiKey && llmPool.length === 0) {
-          sendProgress({ type: 'error', message: 'API Key is missing' });
-          controller.close();
-          return;
-        }
+        const effectiveProvider = platformLLM.provider;
+        const effectiveApiKey = platformLLM.apiKey;
+        const effectiveBaseURL = platformLLM.baseURL;
+        const effectiveModel = platformLLM.model;
+        const llmPool = [platformLLM];
 
         sendProgress({ type: 'progress', message: 'Preparing lecture documents...', current: 0, total: 100 });
         const documents = await normalizeLectureDocuments(lectureDocumentsInput, {
@@ -289,7 +279,7 @@ export async function POST(req: NextRequest) {
               label,
             });
           } catch (error) {
-            console.error('[Lecture Rehearsal Stream] Secondary translation failed, continuing with primary only:', error);
+            logServerError('[Lecture Rehearsal Stream] Secondary translation failed, continuing with primary only:', error);
             return { text: '', tokensUsed: 0 };
           }
         };
@@ -484,9 +474,9 @@ Rules:
           try {
             const inputTokens = Math.round(totalTokensUsed * 0.6);
             const outputTokens = Math.round(totalTokensUsed * 0.4);
-            await recordUsage(session.user.id, 'lecture_rehearsal', inputTokens, outputTokens, model || 'unknown');
+            await recordUsage(session.user.id, 'lecture_rehearsal', inputTokens, outputTokens, effectiveModel || 'unknown');
           } catch (usageError: any) {
-            console.error('[lecture-rehearsal-stream] Failed to record token usage:', usageError);
+            logServerError('[lecture-rehearsal-stream] Failed to record token usage:', usageError);
           }
         }
 
@@ -495,8 +485,8 @@ Rules:
           data: results.length === 1 ? results[0] : { results },
         });
       } catch (error: any) {
-        console.error('[Lecture Rehearsal Stream] Error:', error);
-        sendProgress({ type: 'error', message: error?.message || 'Lecture rehearsal failed' });
+        logServerError('[Lecture Rehearsal Stream] Error:', error);
+        sendProgress({ type: 'error', message: publicErrorMessage(error, 'Lecture rehearsal failed') });
       } finally {
         controller.close();
       }

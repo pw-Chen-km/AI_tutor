@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { jsonrepair } from 'jsonrepair';
+import { getRequiredPlatformLLMConfig } from '@/lib/llm/platform';
+import { requireUserSession, logServerError, publicErrorMessage } from '@/lib/server/api';
 
 function safeParseLLMJson(raw: string) {
     const text = (raw || '').trim();
@@ -158,11 +160,11 @@ function pickDefaultGeminiModel(models: Array<{ name?: string; supportedGenerati
 
 export async function POST(req: NextRequest) {
     try {
-        const { apiKey, baseURL, model, messages } = await req.json();
+        const auth = await requireUserSession();
+        if (auth.response) return auth.response;
 
-        if (!apiKey) {
-            return NextResponse.json({ error: 'API Key is missing' }, { status: 400 });
-        }
+        const { messages } = await req.json();
+        const { apiKey, baseURL, model } = getRequiredPlatformLLMConfig();
 
         // Detect if using Gemini API
         const isGemini = baseURL?.includes('generativelanguage.googleapis.com') || 
@@ -335,11 +337,10 @@ export async function POST(req: NextRequest) {
         }
 
     } catch (error: any) {
-        console.error('LLM Generation Error:', error);
+        logServerError('LLM Generation Error:', error);
 
-        // Return detailed error to help debugging
         return NextResponse.json(
-            { error: error.message || 'Failed to generate content', details: error.toString() },
+            { error: publicErrorMessage(error, 'Failed to generate content') },
             { status: 500 }
         );
     }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getActiveLLMConfig } from '@/lib/llm/config';
+import { getRequiredPlatformLLMConfig } from '@/lib/llm/platform';
 import { skillRegistry } from '@/lib/llm/agent-skills/registry';
+import { requireUserSession, logServerError, publicErrorMessage } from '@/lib/server/api';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -11,12 +12,14 @@ function hasPages(intake: any) {
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await requireUserSession();
+    if (auth.response) return auth.response;
+
     const body = await req.json();
     const {
       fileName,
       fileType,
       intake,
-      llmConfig: rawLLMConfig,
       languageConfig,
       subject,
     } = body || {};
@@ -37,10 +40,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const llmConfig = getActiveLLMConfig(rawLLMConfig);
-    if (!llmConfig?.apiKey) {
-      return NextResponse.json({ error: 'LLM API key is required for outline refinement' }, { status: 400 });
-    }
+    const llmConfig = getRequiredPlatformLLMConfig();
 
     const documentPreprocessor = skillRegistry.getSkill('document_preprocessor');
     const outlineRefiner = skillRegistry.getSkill('outline_refiner');
@@ -101,9 +101,9 @@ export async function POST(req: NextRequest) {
       generatedAt: new Date().toISOString(),
     });
   } catch (error: any) {
-    console.error('Outline refinement API error:', error);
+    logServerError('Outline refinement API error:', error);
     return NextResponse.json(
-      { error: error?.message || 'Failed to refine outline' },
+      { error: publicErrorMessage(error, 'Failed to refine outline') },
       { status: 500 }
     );
   }

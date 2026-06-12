@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import { getActiveLLMConfig } from '@/lib/llm/config';
+import { jsonrepair } from 'jsonrepair';
+import { getRequiredPlatformLLMConfig } from '@/lib/llm/platform';
+import { requireUserSession, logServerError, publicErrorMessage } from '@/lib/server/api';
+import type { LLMConfig } from '@/lib/store';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60; // 60 seconds timeout
+export const maxDuration = 120;
 
 // Test endpoint to verify route exists
 export async function GET(req: NextRequest) {
+    const auth = await requireUserSession();
+    if (auth.response) return auth.response;
+
     return NextResponse.json({ 
         message: 'Exam Evaluation API is working',
         endpoint: '/api/evaluate-exam',
@@ -17,21 +23,38 @@ export async function GET(req: NextRequest) {
 interface StudentFile {
     name: string;
     content: string;
+    sourceFiles?: string[];
+    warnings?: string[];
 }
 
 interface EvaluationRequest {
+    action?: 'parse_teacher' | 'evaluate';
     teacherContext: string;
+    teacherPaper?: TeacherPaper;
     studentFiles: StudentFile[]; // Changed from studentContext to studentFiles array
     subject: string;
-    llmConfig: {
-        apiKey: string;
-        baseURL: string;
-        model: string;
-    };
     languageConfig: {
         primaryLanguage: string;
         secondaryLanguage: string;
     };
+}
+
+interface TeacherQuestion {
+    questionNumber: number;
+    questionText: string;
+    correctAnswer: string;
+    maxPoints: number;
+    gradingNotes?: string;
+    needsReview?: boolean;
+    warnings?: string[];
+}
+
+interface TeacherPaper {
+    questions: TeacherQuestion[];
+    totalPoints: number;
+    needsReview: boolean;
+    warnings: string[];
+    confirmed?: boolean;
 }
 
 interface QuestionEvaluation {
@@ -44,6 +67,9 @@ interface QuestionEvaluation {
     isCorrect: boolean;
     explanation: string;
     feedback: string;
+    gradingMethod?: string;
+    needsReview?: boolean;
+    warnings?: string[];
 }
 
 interface EvaluationResult {
@@ -54,14 +80,309 @@ interface EvaluationResult {
     percentage: number;
     evaluations: QuestionEvaluation[];
     overallFeedback: string;
+    sourceFiles?: string[];
+    intakeWarnings?: string[];
+    needsReview?: boolean;
+    rawResponse?: string;
+}
+
+async function parseLlmJson(content: string): Promise<any> {
+    const trimmed = content.trim();
+    const fenced = trimmed.match(/```json\s*([\s\S]*?)\s*```/i)?.[1]
+        ?? trimmed.match(/```\s*([\s\S]*?)\s*```/i)?.[1];
+    const candidate = (fenced ?? trimmed).trim();
+
+    try {
+        return JSON.parse(candidate);
+    } catch {
+        const jsonMatch = candidate.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No valid JSON found in response');
+        return JSON.parse(jsonrepair(jsonMatch[0]));
+    }
+}
+
+function clampScore(value: any, maxPoints: number) {
+    const score = Number(value);
+    if (!Number.isFinite(score)) return 0;
+    return Math.max(0, Math.min(score, maxPoints));
+}
+
+function normalizeAnswer(value: string) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/[。．.，,;；:：!！?？()[\]{}"'`]/g, '')
+        .trim();
+}
+
+function extractChoiceLetter(value: string) {
+    const normalized = String(value || '').trim();
+    const match = normalized.match(/^(?:option\s*)?([A-D])(?:[.)、\s]|$)/i);
+    return match?.[1]?.toUpperCase() || null;
+}
+
+function parsePlainNumber(value: string) {
+    const normalized = String(value || '')
+        .trim()
+        .replace(/,/g, '')
+        .replace(/\s+/g, '');
+    if (!/^-?\d+(?:\.\d+)?%?$/.test(normalized)) return null;
+    const isPercent = normalized.endsWith('%');
+    const number = Number(normalized.replace(/%$/, ''));
+    if (!Number.isFinite(number)) return null;
+    return isPercent ? number / 100 : number;
+}
+
+async function callExamJson(
+    systemPrompt: string,
+    userPrompt: string,
+    llmConfig: Pick<LLMConfig, 'apiKey' | 'baseURL' | 'model'>,
+    options?: { temperature?: number; maxOutputTokens?: number }
+) {
+    const baseURL = (llmConfig.baseURL || 'https://api.openai.com/v1').trim();
+    const model = (llmConfig.model || 'gpt-5.5').trim();
+    const apiKey = llmConfig.apiKey;
+    const isGemini = baseURL.includes('generativelanguage.googleapis.com') || model.includes('gemini');
+    let content = '';
+
+    if (isGemini) {
+        const geminiBase = baseURL.replace(/\/+$/, '') || 'https://generativelanguage.googleapis.com';
+        const apiVersion = 'v1beta';
+        const geminiModel = model.replace(/^models\//, '') || 'gemini-1.5-flash';
+        const apiUrl = `${geminiBase}/${apiVersion}/models/${geminiModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{
+                    role: 'user',
+                    parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
+                }],
+                generationConfig: {
+                    temperature: options?.temperature ?? 0.3,
+                    maxOutputTokens: options?.maxOutputTokens ?? 4000,
+                    responseMimeType: 'application/json',
+                },
+            }),
+        });
+        if (!response.ok) throw new Error(`AI service error (${response.status})`);
+        const data = await response.json();
+        content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } else {
+        const client = new OpenAI({ apiKey, baseURL });
+        const response = await client.chat.completions.create({
+            model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt },
+            ],
+            temperature: options?.temperature ?? 0.3,
+            response_format: { type: 'json_object' },
+            max_completion_tokens: options?.maxOutputTokens ?? 4000,
+        });
+        content = response.choices[0]?.message?.content || '';
+    }
+
+    if (!content) throw new Error('No content received from AI service');
+    return parseLlmJson(content);
+}
+
+function normalizeTeacherPaper(parsed: any): TeacherPaper {
+    const rawQuestions = Array.isArray(parsed?.questions) ? parsed.questions : [];
+    const warnings = Array.isArray(parsed?.warnings) ? parsed.warnings.map((w: any) => String(w)) : [];
+    const questions: TeacherQuestion[] = rawQuestions.map((question: any, index: number): TeacherQuestion => {
+        const maxPoints = Math.max(0, Number(question?.maxPoints ?? question?.points ?? 0) || 0);
+        const itemWarnings = Array.isArray(question?.warnings)
+            ? question.warnings.map((warning: any) => String(warning))
+            : [];
+        const normalized: TeacherQuestion = {
+            questionNumber: Number(question?.questionNumber ?? question?.number ?? index + 1) || index + 1,
+            questionText: String(question?.questionText ?? question?.question ?? '').trim(),
+            correctAnswer: String(question?.correctAnswer ?? question?.answer ?? '').trim(),
+            maxPoints,
+            gradingNotes: String(question?.gradingNotes ?? question?.rubric ?? '').trim(),
+            warnings: itemWarnings,
+        };
+        normalized.needsReview =
+            Boolean(question?.needsReview) ||
+            !normalized.questionText ||
+            !normalized.correctAnswer ||
+            normalized.maxPoints <= 0 ||
+            itemWarnings.length > 0;
+        if (normalized.needsReview && normalized.warnings?.length === 0) {
+            normalized.warnings = ['Question, answer, or point value needs teacher confirmation.'];
+        }
+        return normalized;
+    });
+    const totalPoints = questions.reduce((sum, question) => sum + question.maxPoints, 0);
+    const needsReview =
+        Boolean(parsed?.needsReview) ||
+        questions.length === 0 ||
+        questions.some((question) => question.needsReview) ||
+        warnings.length > 0;
+
+    if (questions.length === 0) {
+        warnings.push('No questions could be confidently extracted from the teacher materials.');
+    }
+
+    return {
+        questions,
+        totalPoints: Number(parsed?.totalPoints) > 0 ? Number(parsed.totalPoints) : totalPoints,
+        needsReview,
+        warnings,
+        confirmed: false,
+    };
+}
+
+function buildTeacherPaperContext(teacherPaper: TeacherPaper) {
+    return teacherPaper.questions.map((question) => [
+        `Question ${question.questionNumber}`,
+        `Points: ${question.maxPoints}`,
+        `Question: ${question.questionText || '[NEEDS TEACHER CONFIRMATION]'}`,
+        `Correct answer: ${question.correctAnswer || '[NEEDS TEACHER CONFIRMATION]'}`,
+        question.gradingNotes ? `Teacher grading notes: ${question.gradingNotes}` : '',
+        question.needsReview ? `Warnings: ${(question.warnings || []).join(' | ') || 'Needs teacher review'}` : '',
+    ].filter(Boolean).join('\n')).join('\n\n---\n\n');
+}
+
+async function parseTeacherPaper(
+    teacherContext: string,
+    subject: string,
+    llmConfig: Pick<LLMConfig, 'apiKey' | 'baseURL' | 'model'>
+): Promise<TeacherPaper> {
+    const systemPrompt = `You help teachers prepare an exam answer key for grading. Extract the teacher's questions, correct answers, point values, and grading notes. Return valid JSON only. Mark anything unclear as needsReview.`;
+    const userPrompt = `Subject: ${subject || 'general'}
+
+Teacher materials:
+${teacherContext}
+
+Return JSON in this shape:
+{
+  "questions": [
+    {
+      "questionNumber": 1,
+      "questionText": "full question text",
+      "correctAnswer": "teacher's correct answer",
+      "maxPoints": 10,
+      "gradingNotes": "short teacher-facing grading guidance",
+      "needsReview": false,
+      "warnings": []
+    }
+  ],
+  "totalPoints": 100,
+  "needsReview": false,
+  "warnings": []
+}`;
+
+    const parsed = await callExamJson(systemPrompt, userPrompt, llmConfig, {
+        temperature: 0.2,
+        maxOutputTokens: 6000,
+    });
+    return normalizeTeacherPaper(parsed);
+}
+
+function applyFixedRuleChecks(ev: QuestionEvaluation): QuestionEvaluation {
+    const maxPoints = Math.max(0, Number(ev.maxPoints) || 0);
+    const warnings = Array.isArray(ev.warnings) ? [...ev.warnings] : [];
+    let awardedPoints = clampScore(ev.awardedPoints, maxPoints);
+    let isCorrect = Boolean(ev.isCorrect);
+    let gradingMethod = ev.gradingMethod || 'ai_semantic_review';
+
+    const studentAnswer = String(ev.studentAnswer || '');
+    const correctAnswer = String(ev.correctAnswer || '');
+    const normalizedStudent = normalizeAnswer(studentAnswer);
+    const normalizedCorrect = normalizeAnswer(correctAnswer);
+    const studentChoice = extractChoiceLetter(studentAnswer);
+    const correctChoice = extractChoiceLetter(correctAnswer);
+    const studentNumber = parsePlainNumber(studentAnswer);
+    const correctNumber = parsePlainNumber(correctAnswer);
+
+    if (maxPoints > 0 && normalizedStudent && normalizedCorrect && normalizedStudent === normalizedCorrect) {
+        awardedPoints = maxPoints;
+        isCorrect = true;
+        gradingMethod = 'fixed_rule_exact_match';
+    } else if (maxPoints > 0 && studentChoice && correctChoice && studentChoice === correctChoice) {
+        awardedPoints = maxPoints;
+        isCorrect = true;
+        gradingMethod = 'fixed_rule_choice_match';
+    } else if (
+        maxPoints > 0 &&
+        studentNumber !== null &&
+        correctNumber !== null &&
+        Math.abs(studentNumber - correctNumber) <= Math.max(1e-9, Math.abs(correctNumber) * 1e-6)
+    ) {
+        awardedPoints = maxPoints;
+        isCorrect = true;
+        gradingMethod = 'fixed_rule_numeric_match';
+    }
+
+    const needsReview =
+        Boolean(ev.needsReview) ||
+        maxPoints <= 0 ||
+        !String(ev.questionText || '').trim() ||
+        !String(ev.correctAnswer || '').trim() ||
+        /\[(?:NO ANSWER FOUND|UNREADABLE|WARNING|UNKNOWN BINARY|ERROR)/i.test(studentAnswer);
+
+    if (needsReview && !warnings.some((warning) => /review|確認/i.test(warning))) {
+        warnings.push('Teacher review recommended for this question.');
+    }
+
+    return {
+        ...ev,
+        maxPoints,
+        awardedPoints,
+        isCorrect,
+        gradingMethod,
+        needsReview,
+        warnings,
+    };
+}
+
+function normalizeEvaluationResult(
+    parsedResult: EvaluationResult,
+    studentFile: StudentFile,
+    rawResponse?: string
+): EvaluationResult {
+    const evaluations = Array.isArray(parsedResult.evaluations)
+        ? parsedResult.evaluations.map(applyFixedRuleChecks)
+        : [];
+
+    const totalScore = evaluations.length > 0
+        ? evaluations.reduce((sum, ev) => sum + (Number(ev.awardedPoints) || 0), 0)
+        : Number(parsedResult.totalScore) || 0;
+    const maxScore = evaluations.length > 0
+        ? evaluations.reduce((sum, ev) => sum + (Number(ev.maxPoints) || 0), 0)
+        : Number(parsedResult.maxScore) || 0;
+    const percentage = maxScore > 0 ? (totalScore / maxScore) * 100 : 0;
+    const intakeWarnings = Array.isArray(studentFile.warnings) ? studentFile.warnings : [];
+    const needsReview =
+        Boolean(parsedResult.needsReview) ||
+        intakeWarnings.length > 0 ||
+        evaluations.some((ev) => ev.needsReview);
+
+    return {
+        ...parsedResult,
+        studentId: parsedResult.studentId || studentFile.name.replace(/\.[^/.]+$/, ''),
+        studentName: parsedResult.studentName || studentFile.name.replace(/\.[^/.]+$/, '') || 'Unknown',
+        totalScore,
+        maxScore,
+        percentage,
+        evaluations,
+        overallFeedback: parsedResult.overallFeedback || '',
+        sourceFiles: studentFile.sourceFiles || [],
+        intakeWarnings,
+        needsReview,
+        rawResponse,
+    };
 }
 
 // Helper function to evaluate a single student
 async function evaluateSingleStudent(
-    teacherContext: string,
+    teacherPaper: TeacherPaper,
     studentFile: StudentFile,
     subject: string,
-    llmConfig: { apiKey: string; baseURL: string; model: string },
+    llmConfig: Pick<LLMConfig, 'apiKey' | 'baseURL' | 'model'>,
     languageConfig: { primaryLanguage: string; secondaryLanguage: string }
 ): Promise<EvaluationResult> {
     const primaryLang = languageConfig?.primaryLanguage || 'English';
@@ -97,32 +418,43 @@ You must return a valid JSON object with the following structure:
       "maxPoints": <number>,
       "awardedPoints": <number>,
       "isCorrect": <boolean>,
+      "gradingMethod": "fixed_rule|ai_semantic_review|teacher_review_required",
+      "needsReview": <boolean>,
+      "warnings": ["short warning strings when answer matching, reading, or grading is uncertain"],
       "explanation": "detailed explanation of the evaluation in ${primaryLang}${secondaryLang !== 'none' ? `, followed by a blank line, then the same explanation in ${secondaryLang}` : ''}",
       "feedback": "constructive feedback for the student in ${primaryLang}${secondaryLang !== 'none' ? `, followed by a blank line, then the same feedback in ${secondaryLang}` : ''}"
     }
   ],
-  "overallFeedback": "overall feedback for the student in ${primaryLang}${secondaryLang !== 'none' ? `, followed by a blank line, then the same feedback in ${secondaryLang}` : ''}"
+  "overallFeedback": "overall feedback for the student in ${primaryLang}${secondaryLang !== 'none' ? `, followed by a blank line, then the same feedback in ${secondaryLang}` : ''}",
+  "needsReview": <boolean>
 }
 
 ${secondaryLang !== 'none' ? `\n\nIMPORTANT: For "explanation" and "feedback" fields, provide the content in ${primaryLang} first, then add a blank line, then provide the translation in ${secondaryLang}. Do NOT use parentheses or brackets around the second language - just use a blank line to separate them.\n\nExample format:\nexplanation: "This answer is correct because...\n\n這個答案是正確的，因為..."` : ''}`;
 
-    const userPrompt = `Please evaluate the following student answers against the teacher's questions and correct answers.
+    const teacherContext = buildTeacherPaperContext(teacherPaper);
+    const userPrompt = `Please evaluate the following student answers against the confirmed teacher questions and correct answers.
 
-=== TEACHER'S QUESTIONS AND CORRECT ANSWERS ===
+=== CONFIRMED TEACHER QUESTION SET ===
 ${teacherContext}
 
 === STUDENT'S SUBMITTED ANSWERS ===
 FILE: ${studentFile.name}
+${studentFile.sourceFiles?.length ? `SOURCE FILES:\n${studentFile.sourceFiles.join('\n')}\n` : ''}
+${studentFile.warnings?.length ? `READING WARNINGS:\n${studentFile.warnings.join('\n')}\n` : ''}
 ${studentFile.content}
 
 Instructions:
-1. First, parse and identify each question from the teacher's material, including the point value for each question
-2. Match each student answer to the corresponding question
-3. Compare student answers with correct answers
-4. Award full, partial, or zero points based on correctness
-5. Provide clear explanations for each evaluation
-6. Calculate the total score
-7. Extract student ID from the filename (e.g., if filename is "student_001.pdf", studentId should be "student_001")
+1. First, parse and identify each question from the teacher's material, including the point value for each question.
+2. Match each student answer to the corresponding question. Treat "Q1", "1.", "Question 1", and equivalent localized labels as the same question.
+3. If a student answer cannot be matched clearly, set needsReview=true and add a warning. Do not silently attach it to the wrong question.
+4. If a student appears to have skipped a question, use studentAnswer="[NO ANSWER FOUND]", awardedPoints=0, and add a warning.
+5. For objective answers such as multiple choice, exact fill-in answers, and clearly numeric answers, use gradingMethod="fixed_rule".
+6. For short answer, essay, code explanation, or partial-credit reasoning, use gradingMethod="ai_semantic_review".
+7. If teacher points, teacher answer, or student answer text is unreadable or missing, set needsReview=true.
+8. Award full, partial, or zero points based on correctness. Do not award more than maxPoints.
+9. Provide clear explanations for each evaluation and constructive feedback for the student.
+10. Calculate the total score.
+11. Extract student ID from the filename or the "STUDENT:" line in the submitted answers.
 
 Return the evaluation as a JSON object following the specified format.`;
 
@@ -246,12 +578,7 @@ Return the evaluation as a JSON object following the specified format.`;
     // Parse the JSON response
     let parsedResult: EvaluationResult;
     try {
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            parsedResult = JSON.parse(jsonMatch[0]);
-        } else {
-            throw new Error('No valid JSON found in response');
-        }
+        parsedResult = await parseLlmJson(content);
     } catch (parseError) {
         console.error('Failed to parse LLM response:', parseError);
         // Return a default result with raw content
@@ -263,17 +590,31 @@ Return the evaluation as a JSON object following the specified format.`;
             percentage: 0,
             evaluations: [],
             overallFeedback: content,
+            sourceFiles: studentFile.sourceFiles || [],
+            intakeWarnings: studentFile.warnings || [],
+            needsReview: true,
+            rawResponse: content,
         };
     }
 
-    return parsedResult;
+    return normalizeEvaluationResult(parsedResult, studentFile, content);
 }
 
 export async function POST(req: NextRequest) {
     try {
+        const auth = await requireUserSession();
+        if (auth.response) return auth.response;
+
         const body: EvaluationRequest = await req.json();
-        const { teacherContext, studentFiles, subject, llmConfig: rawLLMConfig, languageConfig } = body;
-        const llmConfig = getActiveLLMConfig(rawLLMConfig);
+        const {
+            action = 'evaluate',
+            teacherContext,
+            teacherPaper,
+            studentFiles,
+            subject,
+            languageConfig,
+        } = body;
+        const llmConfig = getRequiredPlatformLLMConfig();
 
         if (!teacherContext) {
             return NextResponse.json(
@@ -282,16 +623,21 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        if (!studentFiles || !Array.isArray(studentFiles) || studentFiles.length === 0) {
+        if (action === 'parse_teacher') {
+            const paper = await parseTeacherPaper(teacherContext, subject, llmConfig);
+            return NextResponse.json({ success: true, paper });
+        }
+
+        if (!teacherPaper?.confirmed || !Array.isArray(teacherPaper.questions) || teacherPaper.questions.length === 0) {
             return NextResponse.json(
-                { error: 'At least one student file is required' },
+                { error: 'Teacher question set must be reviewed and confirmed before evaluation' },
                 { status: 400 }
             );
         }
 
-        if (!llmConfig?.apiKey) {
+        if (!studentFiles || !Array.isArray(studentFiles) || studentFiles.length === 0) {
             return NextResponse.json(
-                { error: 'API key is required' },
+                { error: 'At least one student file is required' },
                 { status: 400 }
             );
         }
@@ -319,68 +665,46 @@ export async function POST(req: NextRequest) {
                 // Send initial progress
                 sendProgress(0, totalStudents);
 
-                // Evaluate each student file separately in parallel
-                const evaluationPromises = studentFiles.map(async (studentFile, index) => {
-                    try {
-                        const result = await evaluateSingleStudent(
-                            teacherContext,
-                            studentFile,
-                            subject,
-                            llmConfig,
-                            languageConfig
-                        );
-                        completed++;
-                        sendProgress(completed, totalStudents, studentFile.name);
-                        return { success: true, result, index };
-                    } catch (error: any) {
-                        console.error(`Error evaluating student ${studentFile.name}:`, error);
-                        const errorResult = {
-                            studentId: studentFile.name.replace(/\.[^/.]+$/, ''), // Remove file extension
-                            studentName: 'Error',
-                            totalScore: 0,
-                            maxScore: 100,
-                            percentage: 0,
-                            evaluations: [],
-                            overallFeedback: `Error evaluating this student: ${error.message || 'Unknown error'}`,
-                        } as EvaluationResult;
-                        completed++;
-                        sendProgress(completed, totalStudents, studentFile.name);
-                        return { success: false, result: errorResult, index };
-                    }
-                });
+                const resultSlots = new Array<EvaluationResult>(totalStudents);
+                let nextIndex = 0;
+                const concurrency = Math.min(3, totalStudents);
 
-                // Wait for all evaluations to complete
-                const settledResults = await Promise.allSettled(evaluationPromises);
-                
-                // Process results in order
-                const sortedResults = settledResults
-                    .map((settled, index) => {
-                        if (settled.status === 'fulfilled') {
-                            return settled.value;
-                        } else {
-                            // Handle unexpected errors
-                            const studentFile = studentFiles[index];
-                            return {
-                                success: false,
-                                result: {
-                                    studentId: studentFile.name.replace(/\.[^/.]+$/, ''),
-                                    studentName: 'Error',
-                                    totalScore: 0,
-                                    maxScore: 100,
-                                    percentage: 0,
-                                    evaluations: [],
-                                    overallFeedback: `Unexpected error: ${settled.reason?.message || 'Unknown error'}`,
-                                } as EvaluationResult,
-                                index,
-                            };
+                const evaluateNext = async () => {
+                    while (nextIndex < totalStudents) {
+                        const index = nextIndex++;
+                        const studentFile = studentFiles[index];
+                        try {
+	                            resultSlots[index] = await evaluateSingleStudent(
+	                                teacherPaper,
+	                                studentFile,
+	                                subject,
+	                                llmConfig,
+                                languageConfig
+                            );
+	                        } catch (error: any) {
+	                            logServerError(`Error evaluating student ${studentFile.name}:`, error);
+                                const message = publicErrorMessage(error, 'Unable to evaluate this student. Teacher review required.');
+	                            resultSlots[index] = {
+	                                studentId: studentFile.name.replace(/\.[^/.]+$/, ''),
+	                                studentName: 'Error',
+                                totalScore: 0,
+	                                maxScore: 100,
+	                                percentage: 0,
+	                                evaluations: [],
+	                                overallFeedback: message,
+	                                sourceFiles: studentFile.sourceFiles || [],
+	                                intakeWarnings: studentFile.warnings || [],
+	                                needsReview: true,
+                            } as EvaluationResult;
+                        } finally {
+                            completed++;
+                            sendProgress(completed, totalStudents, studentFile.name);
                         }
-                    })
-                    .sort((a, b) => a.index - b.index);
+                    }
+                };
 
-                // Collect results
-                sortedResults.forEach(({ result }) => {
-                    results.push(result);
-                });
+                await Promise.all(Array.from({ length: concurrency }, evaluateNext));
+                results.push(...resultSlots);
 
                 // Send final result
                 const finalData = {
@@ -401,9 +725,9 @@ export async function POST(req: NextRequest) {
             },
         });
     } catch (error: any) {
-        console.error('Evaluation API error:', error);
+        logServerError('Evaluation API error:', error);
         return NextResponse.json(
-            { error: error.message || 'Failed to evaluate exam' },
+            { error: publicErrorMessage(error, 'Failed to evaluate exam') },
             { status: 500 }
         );
     }

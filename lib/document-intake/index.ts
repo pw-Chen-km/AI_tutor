@@ -1,4 +1,5 @@
 import { extractDocx } from './docx';
+import { extractImage } from './image';
 import { extractPdf } from './pdf';
 import { extractPptx } from './pptx';
 import { DocumentIntakeInput, DocumentIntakeIntent, DocumentIntakeResult } from './types';
@@ -25,6 +26,8 @@ const TEXT_EXTENSIONS = new Set([
   'h',
 ]);
 
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
+
 function buildTextResult(input: DocumentIntakeInput, fileType: string): DocumentIntakeResult {
   const content = input.buffer.toString('utf-8');
   return {
@@ -46,6 +49,7 @@ export async function intakeDocument(input: DocumentIntakeInput): Promise<Docume
   if (fileType === 'docx') return extractDocx(input);
   if (fileType === 'pptx') return extractPptx(input);
   if (fileType === 'xlsx' || fileType === 'xls') return extractXlsx(input);
+  if (IMAGE_EXTENSIONS.has(fileType)) return extractImage(input);
   if (TEXT_EXTENSIONS.has(fileType)) return buildTextResult(input, fileType);
 
   throw new Error(`Unsupported file type: ${fileType || 'unknown'}`);
@@ -61,4 +65,3 @@ export function inferIntakeIntent(moduleType?: string): DocumentIntakeIntent {
 }
 
 export type { DocumentIntakeInput, DocumentIntakeIntent, DocumentIntakeResult, DocumentPage } from './types';
-

@@ -45,7 +45,6 @@ import { QuestionTypeMix } from '@/components/shared/question-type-mix';
 import { ExportPanel, type ExportItem } from '@/components/shared/export-panel';
 import { VariantSelector } from '@/components/shared/variant-selector';
 import { SourceSelector } from '@/components/shared/source-selector';
-import { getActiveLLMConfig } from '@/lib/llm/config';
 
 // Format type display with title case
 function formatTypeDisplay(format: string | undefined): string {
@@ -82,7 +81,7 @@ interface Exam {
 }
 
 export function ExamsModule() {
-    const { contextFiles, llmConfig, languageConfig, subject, generatedContent, setGeneratedContent, variants, addVariant, removeVariant, reorderVariants, customQuestionTypes, includeWebResources } = useStore();
+    const { contextFiles, languageConfig, subject, generatedContent, setGeneratedContent, variants, addVariant, removeVariant, reorderVariants, customQuestionTypes, includeWebResources } = useStore();
     const [loading, setLoading] = useState(false);
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
     const [showAnswers, setShowAnswers] = useState<Record<number, boolean>>({});
@@ -96,7 +95,7 @@ export function ExamsModule() {
     const [totalScore, setTotalScore] = useState(100);
     const [numberOfQuestions, setNumberOfQuestions] = useState(10);
     const [minutesPerQuestion, setMinutesPerQuestion] = useState(5);
-    const [debugAllowFallback, setDebugAllowFallback] = useState<boolean>(false);
+    const debugAllowFallback = false;
     const [selectedChapters, setSelectedChapters] = useState<string[]>([]);
 
     const exam = generatedContent.exams[0] as Exam | undefined;
@@ -115,7 +114,6 @@ export function ExamsModule() {
     );
     const primaryLanguage = languageConfig?.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
-    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
     const detectedSubject = useMemo(() => resolveDetectedUiSubjectFromContextFiles(contextFiles), [contextFiles]);
     const subjectDetectionDone = useMemo(
         () => hasCompletedSubjectDetectionForContextFiles(contextFiles),
@@ -173,10 +171,6 @@ export function ExamsModule() {
         setDisplayedVariant(prev => ({ ...prev, [itemId]: variantId }));
     };
     const handleGenerateSimilar = async (index: number) => {
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key first.');
-            return;
-        }
         const itemId = getItemId(index);
         setGeneratingSimilar(prev => ({ ...prev, [itemId]: true }));
         try {
@@ -187,11 +181,6 @@ export function ExamsModule() {
                 body: JSON.stringify({
                     originalItem: originalQuestion,
                     moduleType: 'exams',
-                    llmConfig: {
-                        apiKey: activeLLMConfig.apiKey,
-                        baseURL: activeLLMConfig.baseURL,
-                        model: activeLLMConfig.model,
-                    },
                     primaryLanguage,
                     secondaryLanguage,
                 }),
@@ -291,11 +280,6 @@ export function ExamsModule() {
             return;
         }
 
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key in the settings.');
-            return;
-        }
-
         setLoading(true);
         setProgress({ current: 0, total: numberOfQuestions, message: 'Starting...' });
         try {
@@ -318,7 +302,6 @@ export function ExamsModule() {
                         sourceDocuments,
                         debugAllowFallback,
                     },
-                    llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
                     subject,
                     includeWebResources: includeWebResources || false,
@@ -572,17 +555,6 @@ export function ExamsModule() {
                                 value={minutesPerQuestion}
                                 onChange={(e) => setMinutesPerQuestion(Math.max(1, Math.min(180, Number(e.target.value) || 1)))}
                             />
-                        </div>
-                        <div>
-                            <Label htmlFor="exams-debug-fallback">Debug: Allow Fallback</Label>
-                            <div className="h-10 flex items-center">
-                                <input
-                                    id="exams-debug-fallback"
-                                    type="checkbox"
-                                    checked={debugAllowFallback}
-                                    onChange={(e) => setDebugAllowFallback(e.target.checked)}
-                                />
-                            </div>
                         </div>
                     </div>
 
@@ -894,7 +866,6 @@ export function ExamsModule() {
                                                 onClick={async () => {
                                                     if (!exam) return;
                                                     if (contextFiles.length === 0) return;
-                                                    if (!activeLLMConfig.apiKey) return;
                                                     const target = exam.questions?.[index];
                                                     if (!target) return;
 
@@ -918,7 +889,6 @@ export function ExamsModule() {
                                                                     sourceDocuments,
                                                                     debugAllowFallback,
                                                                 },
-                                                            llmConfig: activeLLMConfig,
                                                                 languageConfig: {
                                                                     primaryLanguage,
                                                                     secondaryLanguage,
@@ -1008,7 +978,6 @@ export function ExamsModule() {
                                                                                 sourceDocuments,
                                                                                 debugAllowFallback,
                                                                             },
-                                                            llmConfig: activeLLMConfig,
                                                                             languageConfig: {
                                                                                 primaryLanguage,
                                                                                 secondaryLanguage,
@@ -1118,7 +1087,6 @@ export function ExamsModule() {
                                                                     sourceDocuments,
                                                                     debugAllowFallback,
                                                                 },
-                                                                llmConfig: activeLLMConfig,
                                                                 languageConfig: {
                                                                     primaryLanguage,
                                                                     secondaryLanguage,

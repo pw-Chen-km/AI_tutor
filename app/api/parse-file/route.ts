@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { intakeDocument } from '@/lib/document-intake';
-import { getActiveLLMConfig } from '@/lib/llm/config';
 import type { DocumentIntakeIntent } from '@/lib/document-intake/types';
+import { requireUserSession, logServerError, publicErrorMessage } from '@/lib/server/api';
+import { getPlatformDocumentIntakeConfig } from '@/lib/llm/platform';
+import { UPLOAD_LIMITS, getFileExtension, validateUploadFile } from '@/lib/server/upload-limits';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -20,68 +22,52 @@ function parseIntent(value: FormDataEntryValue | null): DocumentIntakeIntent {
     return SUPPORTED_INTENTS.has(intent as DocumentIntakeIntent) ? (intent as DocumentIntakeIntent) : 'generic';
 }
 
-function parseJsonField(value: FormDataEntryValue | null): Record<string, any> | undefined {
-    if (typeof value !== 'string' || !value.trim()) return undefined;
-    try {
-        const parsed = JSON.parse(value);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined;
-    } catch {
-        return undefined;
-    }
-}
-
 export async function POST(req: NextRequest) {
-    console.log('API: /api/parse-file POST request received');
-
     try {
+        const auth = await requireUserSession();
+        if (auth.response) return auth.response;
+
         let formData;
         try {
             formData = await req.formData();
         } catch (formError: any) {
-            console.error('Failed to parse form data:', formError);
+            logServerError('Failed to parse form data:', formError);
             return NextResponse.json(
-                { error: `Failed to parse form data: ${formError.message}` },
+                { error: 'Failed to parse uploaded file data' },
                 { status: 400 }
             );
         }
 
         const file = formData.get('file') as File;
         const intent = parseIntent(formData.get('intent'));
-        const rawLLMConfig = parseJsonField(formData.get('llmConfig'));
-        const activeLLMConfig = getActiveLLMConfig(rawLLMConfig);
-        const ocrLLMConfig = activeLLMConfig.apiKey
-            ? {
-                provider: activeLLMConfig.provider,
-                apiKey: activeLLMConfig.apiKey,
-                baseURL: activeLLMConfig.baseURL,
-                model: activeLLMConfig.model,
-            }
-            : undefined;
+        const ocrLLMConfig = getPlatformDocumentIntakeConfig();
 
         if (!file) {
-            console.error('No file in form data');
             return NextResponse.json(
                 { error: 'No file provided' },
                 { status: 400 }
             );
         }
 
-        console.log(`API: Received file: ${file.name}, size: ${file.size} bytes`);
+        const fileType = getFileExtension(file.name);
+        const validationError = validateUploadFile(file.name, file.size, { archive: fileType === 'zip' });
+        if (validationError) {
+            return NextResponse.json(
+                { error: validationError, limits: UPLOAD_LIMITS },
+                { status: 400 }
+            );
+        }
 
         let buffer;
         try {
             buffer = Buffer.from(await file.arrayBuffer());
         } catch (bufferError: any) {
-            console.error('Failed to read file buffer:', bufferError);
+            logServerError('Failed to read file buffer:', bufferError);
             return NextResponse.json(
-                { error: `Failed to read file: ${bufferError.message}` },
+                { error: 'Failed to read uploaded file' },
                 { status: 400 }
             );
         }
-
-        const fileType = file.name.split('.').pop()?.toLowerCase();
-
-        console.log(`Processing file: ${file.name} (${fileType})`);
 
         switch (fileType) {
             case 'zip':
@@ -90,6 +76,7 @@ export async function POST(req: NextRequest) {
                     isArchive: true,
                     archiveType: 'zip',
                     message: 'ZIP file detected. Please use /api/extract-archive endpoint to extract files.',
+                    limits: UPLOAD_LIMITS,
                 });
 
             case 'rar':
@@ -98,6 +85,7 @@ export async function POST(req: NextRequest) {
                     isArchive: true,
                     archiveType: 'rar',
                     message: 'RAR file detected. Please use /api/extract-archive endpoint to extract files.',
+                    limits: UPLOAD_LIMITS,
                 });
 
             default:
@@ -108,9 +96,6 @@ export async function POST(req: NextRequest) {
                         intent,
                         llmConfig: ocrLLMConfig,
                     });
-                    console.log(
-                        `Successfully parsed ${file.name}, strategy: ${result.strategy}, length: ${result.content.length}`
-                    );
                     return NextResponse.json({
                         fileName: result.fileName,
                         fileType: result.fileType,
@@ -120,18 +105,20 @@ export async function POST(req: NextRequest) {
                         warnings: result.warnings,
                         metadata: result.metadata,
                         strategy: result.strategy,
+                        limits: UPLOAD_LIMITS,
                     });
                 } catch (parseError: any) {
+                    logServerError('File parsing error:', parseError);
                     return NextResponse.json(
-                        { error: parseError?.message || `Unsupported file type: ${fileType}` },
+                        { error: publicErrorMessage(parseError, 'Failed to parse uploaded file') },
                         { status: 400 }
                     );
                 }
         }
     } catch (error: any) {
-        console.error('SERVER ERROR parsing file:', error);
+        logServerError('SERVER ERROR parsing file:', error);
         return NextResponse.json(
-            { error: `Failed to parse file: ${error.message || 'Unknown error'}` },
+            { error: publicErrorMessage(error, 'Failed to parse uploaded file') },
             { status: 500 }
         );
     }

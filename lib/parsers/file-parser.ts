@@ -106,17 +106,13 @@ export async function parseFileForEvaluation(file: File, options: ParseFileOptio
         case 'docx':
         case 'pptx':
         case 'xlsx':
-            // These require server-side processing
-            return (await uploadAndParse(file, 'evaluate_student_answer', options)).content;
-
         case 'png':
         case 'jpg':
         case 'jpeg':
         case 'gif':
         case 'webp':
-            // For images, we return a placeholder and store base64 separately
-            // The actual image will be sent to LLM via vision API
-            return `[IMAGE: ${file.name}]`;
+            // These require server-side processing
+            return (await uploadAndParse(file, 'evaluate_student_answer', options)).content;
 
         case 'zip':
         case 'rar':

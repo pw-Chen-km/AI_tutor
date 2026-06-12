@@ -1,13 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import JSZip from 'jszip';
 import { useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Sparkles, Loader2, FileText, ClipboardCheck, CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronUp, Download, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { CodeBlock } from '@/components/shared/code-block';
-import { getActiveLLMConfig } from '@/lib/llm/config';
 
 type ExamEvalFormat = 'docx' | 'pdf';
 
@@ -39,6 +38,9 @@ interface QuestionEvaluation {
     isCorrect: boolean;
     explanation: string;
     feedback: string;
+    gradingMethod?: string;
+    needsReview?: boolean;
+    warnings?: string[];
 }
 
 interface EvaluationResult {
@@ -49,11 +51,32 @@ interface EvaluationResult {
     percentage: number;
     evaluations: QuestionEvaluation[];
     overallFeedback: string;
+    sourceFiles?: string[];
+    intakeWarnings?: string[];
+    needsReview?: boolean;
     rawResponse?: string;
 }
 
+interface TeacherQuestion {
+    questionNumber: number;
+    questionText: string;
+    correctAnswer: string;
+    maxPoints: number;
+    gradingNotes?: string;
+    needsReview?: boolean;
+    warnings?: string[];
+}
+
+interface TeacherPaper {
+    questions: TeacherQuestion[];
+    totalPoints: number;
+    needsReview: boolean;
+    warnings: string[];
+    confirmed?: boolean;
+}
+
 export function ExamEvaluationModule() {
-    const { teacherFiles, studentFiles, llmConfig, languageConfig, subject, generatedContent, setGeneratedContent } = useStore();
+    const { teacherFiles, studentFiles, languageConfig, subject, generatedContent, setGeneratedContent } = useStore();
     const [loading, setLoading] = useState(false);
     const [evaluationResults, setEvaluationResults] = useState<EvaluationResult[]>(() => {
         const cached = (generatedContent as any)?.exam_evaluation;
@@ -69,21 +92,148 @@ export function ExamEvaluationModule() {
     // (using index avoids collisions when two students have the same name / no id).
     const [exportTarget, setExportTarget] = useState<'all' | number>('all');
     const [exporting, setExporting] = useState(false);
-    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
+    const [teacherPaper, setTeacherPaper] = useState<TeacherPaper | null>(null);
+    const [paperLoading, setPaperLoading] = useState(false);
+    const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'warning' | 'error'; text: string } | null>(null);
+
+    const teacherSignature = useMemo(
+        () => teacherFiles.map((file) => `${file.id}:${file.name}:${String(file.content || '').length}`).join('|'),
+        [teacherFiles]
+    );
+
+    useEffect(() => {
+        setTeacherPaper(null);
+        setStatusMessage(null);
+    }, [teacherSignature]);
+
+    const buildTeacherContext = () => teacherFiles.map((f) => {
+        const warnings = Array.isArray(f.intake?.warnings) && f.intake.warnings.length > 0
+            ? `\nREADING WARNINGS:\n${f.intake.warnings.join('\n')}\n`
+            : '';
+        return `FILE: ${f.name}${warnings}\n${f.content}`;
+    }).join('\n\n---\n\n');
+
+    const buildStudentFilesPayload = () => studentFiles.map((f) => ({
+        name: f.name,
+        content: f.content,
+        sourceFiles: Array.isArray(f.intake?.metadata?.sourceFiles)
+            ? f.intake?.metadata?.sourceFiles
+            : [],
+        warnings: Array.isArray(f.intake?.warnings) ? f.intake?.warnings : [],
+    }));
+
+    const recomputeTeacherPaper = (paper: TeacherPaper, confirmed = false): TeacherPaper => {
+        const questions = paper.questions.map((question, index) => {
+            const maxPoints = Math.max(0, Number(question.maxPoints) || 0);
+            const warnings = Array.isArray(question.warnings) ? question.warnings : [];
+            const missing = !question.questionText.trim() || !question.correctAnswer.trim() || maxPoints <= 0;
+            return {
+                ...question,
+                questionNumber: Number(question.questionNumber) || index + 1,
+                maxPoints,
+                needsReview: Boolean(question.needsReview) || missing || warnings.length > 0,
+            };
+        });
+        return {
+            ...paper,
+            questions,
+            totalPoints: questions.reduce((sum, question) => sum + (Number(question.maxPoints) || 0), 0),
+            needsReview: questions.some((question) => question.needsReview) || (paper.warnings || []).length > 0,
+            confirmed,
+        };
+    };
+
+    const teacherPaperHasMissingRequiredFields = (paper: TeacherPaper | null) => {
+        if (!paper || paper.questions.length === 0) return true;
+        return paper.questions.some((question) =>
+            !question.questionText.trim() ||
+            !question.correctAnswer.trim() ||
+            (Number(question.maxPoints) || 0) <= 0
+        );
+    };
+
+    const handleParseTeacherPaper = async () => {
+        if (teacherFiles.length === 0) {
+            setStatusMessage({ type: 'error', text: 'Please upload teacher files with questions and correct answers.' });
+            return;
+        }
+
+        setPaperLoading(true);
+        setStatusMessage(null);
+
+        try {
+            const response = await fetch('/api/evaluate-exam', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'parse_teacher',
+                    teacherContext: buildTeacherContext(),
+                    subject,
+                    languageConfig,
+                }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || `HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            const parsedPaper = recomputeTeacherPaper(data.paper, false);
+            setTeacherPaper(parsedPaper);
+            setEvaluationResults([]);
+            setGeneratedContent('exam_evaluation', []);
+            setStatusMessage({
+                type: parsedPaper.needsReview ? 'warning' : 'success',
+                text: parsedPaper.needsReview
+                    ? 'Teacher question set was read, but some items need confirmation.'
+                    : 'Teacher question set was read successfully. Please review and confirm it.',
+            });
+        } catch (error: any) {
+            console.error('Teacher paper parse error:', error);
+            setStatusMessage({ type: 'error', text: `Failed to read teacher question set: ${error?.message || 'Unknown error'}` });
+        } finally {
+            setPaperLoading(false);
+        }
+    };
+
+    const updateTeacherQuestion = (index: number, patch: Partial<TeacherQuestion>) => {
+        setTeacherPaper((prev) => {
+            if (!prev) return prev;
+            const next = {
+                ...prev,
+                questions: prev.questions.map((question, questionIndex) =>
+                    questionIndex === index ? { ...question, ...patch } : question
+                ),
+            };
+            return recomputeTeacherPaper(next, false);
+        });
+    };
+
+    const confirmTeacherPaper = () => {
+        if (!teacherPaper) return;
+        if (teacherPaperHasMissingRequiredFields(teacherPaper)) {
+            setStatusMessage({ type: 'error', text: 'Please fill in every question, correct answer, and point value before confirming.' });
+            return;
+        }
+        const confirmedPaper = recomputeTeacherPaper(teacherPaper, true);
+        setTeacherPaper(confirmedPaper);
+        setStatusMessage({ type: 'success', text: 'Teacher question set confirmed. You can start evaluating students.' });
+    };
 
     const handleEvaluate = async () => {
         if (teacherFiles.length === 0) {
-            alert('Please upload teacher files with questions and correct answers.');
+            setStatusMessage({ type: 'error', text: 'Please upload teacher files with questions and correct answers.' });
             return;
         }
 
         if (studentFiles.length === 0) {
-            alert('Please upload student submission files.');
+            setStatusMessage({ type: 'error', text: 'Please upload student submission files.' });
             return;
         }
 
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key in the settings.');
+        if (!teacherPaper?.confirmed) {
+            setStatusMessage({ type: 'error', text: 'Please review and confirm the teacher question set before evaluating students.' });
             return;
         }
 
@@ -91,24 +241,16 @@ export function ExamEvaluationModule() {
         setProgress({ current: 0, total: studentFiles.length, percentage: 0, studentName: '' });
         
         try {
-            // Build context from teacher files (questions + correct answers)
-            const teacherContext = teacherFiles.map((f) => `FILE: ${f.name}\n${f.content}`).join('\n\n---\n\n');
-            
-            // Each student file represents one student - send as array
-            const studentFilesArray = studentFiles.map((f) => ({
-                name: f.name,
-                content: f.content,
-            }));
-
             // Call evaluation API with streaming response
             const response = await fetch('/api/evaluate-exam', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    teacherContext,
-                    studentFiles: studentFilesArray,
+                    action: 'evaluate',
+                    teacherContext: buildTeacherContext(),
+                    teacherPaper,
+                    studentFiles: buildStudentFilesPayload(),
                     subject,
-                    llmConfig: activeLLMConfig,
                     languageConfig,
                 }),
             });
@@ -160,6 +302,7 @@ export function ExamEvaluationModule() {
                                 results = data.results || [];
                                 setEvaluationResults(results);
                                 setGeneratedContent('exam_evaluation', results);
+                                setStatusMessage({ type: 'success', text: `Evaluation complete for ${results.length} student(s).` });
                                 
                                 // Auto-expand first student
                                 if (results.length > 0) {
@@ -174,7 +317,7 @@ export function ExamEvaluationModule() {
             }
         } catch (error: any) {
             console.error('Evaluation error:', error);
-            alert(`Evaluation failed: ${error.message || 'Unknown error'}`);
+            setStatusMessage({ type: 'error', text: `Evaluation failed: ${error.message || 'Unknown error'}` });
         } finally {
             setLoading(false);
             setProgress({ current: 0, total: 0, percentage: 0, studentName: '' });
@@ -257,6 +400,15 @@ export function ExamEvaluationModule() {
         lines.push(`**Score:** ${totalScore} / ${maxScore}  (${percentage.toFixed(1)}%)`);
         if (hasModifications) lines.push('*分數已人工調整*');
         if (result.studentId) lines.push(`**Student ID:** ${result.studentId}`);
+        if (Array.isArray(result.sourceFiles) && result.sourceFiles.length > 0) {
+            lines.push(`**Source Files:** ${result.sourceFiles.join(', ')}`);
+        }
+        if (Array.isArray(result.intakeWarnings) && result.intakeWarnings.length > 0) {
+            lines.push('');
+            lines.push('**Reading Warnings:**');
+            lines.push('');
+            result.intakeWarnings.forEach((warning) => lines.push(`- ${warning}`));
+        }
         lines.push('');
         if (result.overallFeedback) {
             lines.push('## Overall Feedback');
@@ -274,6 +426,18 @@ export function ExamEvaluationModule() {
                 const modMarker = isModified ? ' *(已修改)*' : '';
                 lines.push(`### Question ${ev.questionNumber}  —  ${effectiveScore} / ${ev.maxPoints} pts  (${status})${modMarker}`);
                 lines.push('');
+                if (ev.gradingMethod) {
+                    lines.push(`**Grading Method:** ${ev.gradingMethod}`);
+                    lines.push('');
+                }
+                if (ev.needsReview || (Array.isArray(ev.warnings) && ev.warnings.length > 0)) {
+                    lines.push('**Needs Teacher Review:** Yes');
+                    lines.push('');
+                    if (Array.isArray(ev.warnings) && ev.warnings.length > 0) {
+                        ev.warnings.forEach((warning) => lines.push(`- ${warning}`));
+                        lines.push('');
+                    }
+                }
                 if (ev.questionText) {
                     lines.push('**Question:**');
                     lines.push('');
@@ -369,7 +533,7 @@ export function ExamEvaluationModule() {
 
     const handleExport = async () => {
         if (evaluationResults.length === 0) {
-            alert('Please run an evaluation first.');
+            setStatusMessage({ type: 'error', text: 'Please run an evaluation first.' });
             return;
         }
         setExporting(true);
@@ -398,7 +562,7 @@ export function ExamEvaluationModule() {
             }
         } catch (e: any) {
             console.error('Evaluation export error:', e);
-            alert(`Export failed: ${e?.message || 'Unknown error'}`);
+            setStatusMessage({ type: 'error', text: `Export failed: ${e?.message || 'Unknown error'}` });
         } finally {
             setExporting(false);
         }
@@ -495,6 +659,22 @@ export function ExamEvaluationModule() {
         return formatted;
     };
 
+    const getFileWarnings = (file: any): string[] => {
+        return Array.isArray(file?.intake?.warnings) ? file.intake.warnings : [];
+    };
+
+    const getSourceFiles = (file: any): string[] => {
+        return Array.isArray(file?.intake?.metadata?.sourceFiles)
+            ? file.intake.metadata.sourceFiles
+            : [];
+    };
+
+    const getPreview = (content: string, maxLength = 320) => {
+        const text = String(content || '').replace(/\s+/g, ' ').trim();
+        if (text.length <= maxLength) return text;
+        return `${text.slice(0, maxLength)}...`;
+    };
+
     // Render answer with code detection
     const renderAnswer = (answer: string, isCode: boolean = false) => {
         if (isCode || looksLikeCode(answer)) {
@@ -517,6 +697,20 @@ export function ExamEvaluationModule() {
                     </p>
                 </div>
             </div>
+
+            {statusMessage && (
+                <div
+                    className={`rounded-md border px-4 py-3 text-sm ${
+                        statusMessage.type === 'success'
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200'
+                            : statusMessage.type === 'warning'
+                                ? 'border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-900 dark:bg-orange-950/30 dark:text-orange-200'
+                                : 'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200'
+                    }`}
+                >
+                    {statusMessage.text}
+                </div>
+            )}
 
             {/* Status Cards */}
             <div className="grid grid-cols-2 gap-4">
@@ -569,11 +763,230 @@ export function ExamEvaluationModule() {
                 </Card>
             </div>
 
+            {(teacherFiles.length > 0 || studentFiles.length > 0) && (
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base">System Read Preview</CardTitle>
+                        <CardDescription>
+                            What the evaluator will use before scoring.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <p className="text-sm font-medium text-foreground">Teacher Materials</p>
+                                {teacherFiles.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">No teacher material read yet.</p>
+                                ) : (
+                                    teacherFiles.map((file) => {
+                                        const warnings = getFileWarnings(file);
+                                        const sourceFiles = getSourceFiles(file);
+                                        return (
+                                            <div key={file.id} className="rounded-md border p-3 bg-muted/20">
+                                                <p className="text-sm font-medium truncate">{file.name}</p>
+                                                {sourceFiles.length > 0 && (
+                                                    <p className="text-xs text-muted-foreground mt-1">
+                                                        Sources: {sourceFiles.slice(0, 4).join(', ')}
+                                                        {sourceFiles.length > 4 ? ` +${sourceFiles.length - 4}` : ''}
+                                                    </p>
+                                                )}
+                                                {warnings.length > 0 && (
+                                                    <p className="text-xs text-orange-700 dark:text-orange-300 mt-1">
+                                                        Needs check: {warnings.slice(0, 2).join(' | ')}
+                                                    </p>
+                                                )}
+                                                <p className="text-xs text-muted-foreground mt-2">
+                                                    {getPreview(file.content)}
+                                                </p>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+                            <div className="space-y-2">
+                                <p className="text-sm font-medium text-foreground">Student Submissions</p>
+                                {studentFiles.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">No student submission read yet.</p>
+                                ) : (
+                                    studentFiles.slice(0, 6).map((file) => {
+                                        const warnings = getFileWarnings(file);
+                                        const sourceFiles = getSourceFiles(file);
+                                        return (
+                                            <div key={file.id} className="rounded-md border p-3 bg-muted/20">
+                                                <p className="text-sm font-medium truncate">{file.name}</p>
+                                                {sourceFiles.length > 0 && (
+                                                    <p className="text-xs text-muted-foreground mt-1">
+                                                        Sources: {sourceFiles.slice(0, 4).join(', ')}
+                                                        {sourceFiles.length > 4 ? ` +${sourceFiles.length - 4}` : ''}
+                                                    </p>
+                                                )}
+                                                {warnings.length > 0 && (
+                                                    <p className="text-xs text-orange-700 dark:text-orange-300 mt-1">
+                                                        Needs check: {warnings.slice(0, 2).join(' | ')}
+                                                    </p>
+                                                )}
+                                                <p className="text-xs text-muted-foreground mt-2">
+                                                    {getPreview(file.content)}
+                                                </p>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                                {studentFiles.length > 6 && (
+                                    <p className="text-xs text-muted-foreground">
+                                        Showing 6 of {studentFiles.length} students.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
+            <Card>
+                <CardHeader className="pb-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <CardTitle className="text-base flex items-center gap-2">
+                                <ClipboardCheck className="w-4 h-4" />
+                                System Understood Question Set
+                            </CardTitle>
+                            <CardDescription>
+                                Review the questions, answers, and points before grading students.
+                            </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleParseTeacherPaper}
+                                disabled={paperLoading || teacherFiles.length === 0}
+                            >
+                                {paperLoading ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        Reading...
+                                    </>
+                                ) : (
+                                    <>
+                                        <FileText className="w-4 h-4 mr-2" />
+                                        Read Teacher Files
+                                    </>
+                                )}
+                            </Button>
+                            <Button
+                                size="sm"
+                                onClick={confirmTeacherPaper}
+                                disabled={!teacherPaper || paperLoading || teacherPaperHasMissingRequiredFields(teacherPaper)}
+                            >
+                                <CheckCircle2 className="w-4 h-4 mr-2" />
+                                Confirm Question Set
+                            </Button>
+                        </div>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    {!teacherPaper ? (
+                        <p className="text-sm text-muted-foreground">
+                            Upload teacher files, then read them to create the question set for review.
+                        </p>
+                    ) : (
+                        <div className="space-y-4">
+                            <div className="flex flex-wrap items-center gap-3 text-sm">
+                                <span className="font-medium">{teacherPaper.questions.length} question(s)</span>
+                                <span className="text-muted-foreground">Total: {teacherPaper.totalPoints} pts</span>
+                                {teacherPaper.confirmed ? (
+                                    <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200">
+                                        Confirmed
+                                    </span>
+                                ) : (
+                                    <span className="px-2 py-0.5 text-xs rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-200">
+                                        Needs confirmation
+                                    </span>
+                                )}
+                            </div>
+                            {teacherPaper.warnings.length > 0 && (
+                                <div className="rounded-md bg-orange-50 p-3 text-xs text-orange-700 dark:bg-orange-950/20 dark:text-orange-300">
+                                    {teacherPaper.warnings.map((warning, index) => (
+                                        <p key={index}>• {warning}</p>
+                                    ))}
+                                </div>
+                            )}
+                            <div className="space-y-3">
+                                {teacherPaper.questions.map((question, index) => (
+                                    <div key={`${question.questionNumber}-${index}`} className="rounded-md border p-3 bg-muted/20 space-y-3">
+                                        <div className="flex flex-wrap items-center gap-3">
+                                            <label className="text-xs text-muted-foreground">
+                                                Question #
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    className="ml-2 w-20 rounded-md border bg-background px-2 py-1 text-sm"
+                                                    value={question.questionNumber}
+                                                    onChange={(e) => updateTeacherQuestion(index, { questionNumber: Number(e.target.value) || index + 1 })}
+                                                />
+                                            </label>
+                                            <label className="text-xs text-muted-foreground">
+                                                Points
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    step="0.5"
+                                                    className="ml-2 w-24 rounded-md border bg-background px-2 py-1 text-sm"
+                                                    value={question.maxPoints}
+                                                    onChange={(e) => updateTeacherQuestion(index, { maxPoints: Number(e.target.value) || 0 })}
+                                                />
+                                            </label>
+                                            {(question.needsReview || (question.warnings || []).length > 0) && (
+                                                <span className="px-2 py-0.5 text-xs rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-200">
+                                                    Needs check
+                                                </span>
+                                            )}
+                                        </div>
+                                        <label className="block text-xs text-muted-foreground">
+                                            Question
+                                            <textarea
+                                                className="mt-1 min-h-20 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                                                value={question.questionText}
+                                                onChange={(e) => updateTeacherQuestion(index, { questionText: e.target.value })}
+                                            />
+                                        </label>
+                                        <label className="block text-xs text-muted-foreground">
+                                            Correct Answer
+                                            <textarea
+                                                className="mt-1 min-h-16 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                                                value={question.correctAnswer}
+                                                onChange={(e) => updateTeacherQuestion(index, { correctAnswer: e.target.value })}
+                                            />
+                                        </label>
+                                        <label className="block text-xs text-muted-foreground">
+                                            Grading Notes
+                                            <textarea
+                                                className="mt-1 min-h-14 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                                                value={question.gradingNotes || ''}
+                                                onChange={(e) => updateTeacherQuestion(index, { gradingNotes: e.target.value })}
+                                            />
+                                        </label>
+                                        {(question.warnings || []).length > 0 && (
+                                            <div className="rounded-md bg-orange-50 p-2 text-xs text-orange-700 dark:bg-orange-950/20 dark:text-orange-300">
+                                                {(question.warnings || []).map((warning, warningIndex) => (
+                                                    <p key={warningIndex}>• {warning}</p>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
             {/* Generate Button */}
             <div className="flex flex-col items-center gap-4">
                 <Button
                     onClick={handleEvaluate}
-                    disabled={loading || teacherFiles.length === 0 || studentFiles.length === 0}
+                    disabled={loading || teacherFiles.length === 0 || studentFiles.length === 0 || !teacherPaper?.confirmed}
                     className="px-8 py-6 text-base rounded-xl transition-all duration-200 cursor-pointer disabled:cursor-not-allowed"
                     size="lg"
                 >
@@ -585,7 +998,7 @@ export function ExamEvaluationModule() {
                     ) : (
                         <>
                             <Sparkles className="w-5 h-5 mr-2" />
-                            Start Evaluation
+                            {teacherPaper?.confirmed ? 'Start Evaluation' : 'Confirm Question Set First'}
                         </>
                     )}
                 </Button>
@@ -767,7 +1180,14 @@ export function ExamEvaluationModule() {
                                         )}
                                     </div>
                                     <div>
-                                        <h3 className="font-semibold">{result.studentName || `Student ${resultIndex + 1}`}</h3>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <h3 className="font-semibold">{result.studentName || `Student ${resultIndex + 1}`}</h3>
+                                            {result.needsReview && (
+                                                <span className="px-2 py-0.5 text-xs bg-orange-100 text-orange-700 rounded-full">
+                                                    需要檢查
+                                                </span>
+                                            )}
+                                        </div>
                                         <p className="text-sm text-muted-foreground">{result.studentId}</p>
                                     </div>
                                 </div>
@@ -812,6 +1232,26 @@ export function ExamEvaluationModule() {
                                         </div>
                                     )}
 
+                                    {Array.isArray(result.sourceFiles) && result.sourceFiles.length > 0 && (
+                                        <div className="mb-4 p-3 bg-muted/30 rounded-lg">
+                                            <p className="text-sm font-medium mb-1">Source Files</p>
+                                            <p className="text-xs text-muted-foreground whitespace-pre-wrap">
+                                                {result.sourceFiles.join('\n')}
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {Array.isArray(result.intakeWarnings) && result.intakeWarnings.length > 0 && (
+                                        <div className="mb-4 p-3 bg-orange-50 dark:bg-orange-950/20 rounded-lg">
+                                            <p className="text-sm font-medium text-orange-700 dark:text-orange-300 mb-1">Reading Warnings</p>
+                                            <ul className="text-xs text-orange-600 dark:text-orange-300 list-disc list-inside">
+                                                {result.intakeWarnings.map((warning, idx) => (
+                                                    <li key={idx}>{warning}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+
                                     {/* Question Evaluations */}
                                     <div className="space-y-3">
                                         {result.evaluations?.map((evaluation, evalIndex) => {
@@ -819,7 +1259,11 @@ export function ExamEvaluationModule() {
                                             const isExpanded = expandedQuestions[questionKey];
                                             const effectiveScore = getEffectiveScore(result, evaluation);
                                             const isModified = modifiedScores[result.studentId]?.[evaluation.questionNumber]?.isModified ?? false;
-                                            const warnings = getScoreWarnings(evaluation, effectiveScore);
+                                            const warnings = [
+                                                ...getScoreWarnings(evaluation, effectiveScore),
+                                                ...(Array.isArray(evaluation.warnings) ? evaluation.warnings : []),
+                                            ];
+                                            const needsReview = Boolean(evaluation.needsReview) || warnings.length > 0;
                                             
                                             return (
                                                 <div 
@@ -848,7 +1292,7 @@ export function ExamEvaluationModule() {
                                                             <span className="font-medium text-sm">
                                                                 Question {evaluation.questionNumber}
                                                             </span>
-                                                            {warnings.length > 0 && (
+                                                            {needsReview && (
                                                                 <span className="px-2 py-0.5 text-xs bg-orange-100 text-orange-700 rounded-full" title={warnings.join(', ')}>
                                                                     需要檢查
                                                                 </span>
@@ -917,13 +1361,20 @@ export function ExamEvaluationModule() {
                                                                 </div>
                                                                 {warnings.length > 0 && (
                                                                     <div className="mt-2 p-2 bg-orange-50 dark:bg-orange-950/20 rounded">
-                                                                        <p className="text-xs font-medium text-orange-700 dark:text-orange-400 mb-1">⚠️ 注意：</p>
+                                                                        <p className="text-xs font-medium text-orange-700 dark:text-orange-400 mb-1">注意：</p>
                                                                         <ul className="text-xs text-orange-600 dark:text-orange-300 list-disc list-inside">
                                                                             {warnings.map((w, i) => <li key={i}>{w}</li>)}
                                                                         </ul>
                                                                     </div>
                                                                 )}
                                                             </div>
+
+                                                            {evaluation.gradingMethod && (
+                                                                <div className="p-2 bg-muted/30 rounded">
+                                                                    <p className="font-medium text-muted-foreground mb-1">Grading Method</p>
+                                                                    <p className="text-muted-foreground">{evaluation.gradingMethod}</p>
+                                                                </div>
+                                                            )}
                                                             
                                                             <div>
                                                                 <p className="font-medium text-muted-foreground mb-1">Question</p>

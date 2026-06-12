@@ -2,7 +2,6 @@
 
 import { useStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { BookOpen, FlaskConical, FileText, GraduationCap, Mic, Settings, X, Sliders, ClipboardCheck, LogOut, CreditCard, User, Shield, History } from 'lucide-react';
@@ -18,7 +17,7 @@ import { GenerationHistoryPanel } from '@/components/generation-history/generati
 import { PLAN_CONFIG, type PlanType } from '@/lib/db/schema';
 
 export function Sidebar() {
-    const { activeModule, setActiveModule, llmConfig, setLLMConfig, languageConfig, setLanguageConfig, customQuestionTypes, toggleCustomQuestionType } = useStore();
+    const { activeModule, setActiveModule, languageConfig, setLanguageConfig, customQuestionTypes, toggleCustomQuestionType } = useStore();
     const { data: session, update: updateSession } = useSession();
     const router = useRouter();
     const [showSettings, setShowSettings] = useState(false);
@@ -94,38 +93,6 @@ export function Sidebar() {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [userPlan, activeModule, setActiveModule]);
-
-    const handleProviderChange = (provider: string) => {
-        const presets: Record<string, { baseURL: string; model: string }> = {
-            openai: {
-                baseURL: 'https://api.openai.com/v1',
-                model: 'gpt-5.5'
-            },
-            gemini: {
-                baseURL: 'https://generativelanguage.googleapis.com',
-                model: 'gemini-1.5-flash'
-            },
-            deepseek: {
-                baseURL: 'https://api.deepseek.com/v1',
-                model: 'deepseek-chat'
-            },
-            anthropic: {
-                baseURL: 'https://api.anthropic.com/v1',
-                model: 'claude-3-sonnet'
-            },
-            custom: {
-                baseURL: 'http://localhost:11434/v1',
-                model: 'llama2'
-            },
-        };
-
-        const preset = presets[provider as keyof typeof presets];
-        setLLMConfig({
-            provider: provider as any,
-            baseURL: preset?.baseURL || llmConfig.baseURL,
-            model: preset?.model || llmConfig.model
-        });
-    };
 
     return (
         <>

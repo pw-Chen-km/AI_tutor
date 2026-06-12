@@ -35,7 +35,6 @@ import { QuestionTypeMix } from '@/components/shared/question-type-mix';
 import { ExportPanel, type ExportItem } from '@/components/shared/export-panel';
 import { VariantSelector } from '@/components/shared/variant-selector';
 import { SourceSelector } from '@/components/shared/source-selector';
-import { getActiveLLMConfig } from '@/lib/llm/config';
 
 // Format type display with title case
 function formatTypeDisplay(format: string | undefined): string {
@@ -71,7 +70,7 @@ interface Homework {
 }
 
 export function HomeworkModule() {
-    const { contextFiles, llmConfig, languageConfig, subject, generatedContent, setGeneratedContent, variants, addVariant, removeVariant, reorderVariants, customQuestionTypes, includeWebResources } = useStore();
+    const { contextFiles, languageConfig, subject, generatedContent, setGeneratedContent, variants, addVariant, removeVariant, reorderVariants, customQuestionTypes, includeWebResources } = useStore();
     const [loading, setLoading] = useState(false);
     const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
     const [showSolution, setShowSolution] = useState<Record<number, boolean>>({});
@@ -82,7 +81,7 @@ export function HomeworkModule() {
     const [selectedChapters, setSelectedChapters] = useState<string[]>([]);
     const [numberOfProblems, setNumberOfProblems] = useState<number>(5);
     const [minutesPerProblem, setMinutesPerProblem] = useState<number>(20);
-    const [debugAllowFallback, setDebugAllowFallback] = useState<boolean>(false);
+    const debugAllowFallback = false;
     const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
     const [selectedVariants, setSelectedVariants] = useState<Record<string, string[]>>({});
     const [displayedVariant, setDisplayedVariant] = useState<Record<string, string>>({});
@@ -127,7 +126,6 @@ export function HomeworkModule() {
     );
     const primaryLanguage = languageConfig?.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
-    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
     // Variant helpers
     const getItemId = (index: number) => `homework-${index + 1}`;
@@ -170,10 +168,6 @@ export function HomeworkModule() {
         setDisplayedVariant(prev => ({ ...prev, [itemId]: variantId }));
     };
     const handleGenerateSimilar = async (index: number) => {
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key first.');
-            return;
-        }
         const itemId = getItemId(index);
         setGeneratingSimilar(prev => ({ ...prev, [itemId]: true }));
         try {
@@ -184,11 +178,6 @@ export function HomeworkModule() {
                 body: JSON.stringify({
                     originalItem: originalProblem,
                     moduleType: 'homework',
-                    llmConfig: {
-                        apiKey: activeLLMConfig.apiKey,
-                        baseURL: activeLLMConfig.baseURL,
-                        model: activeLLMConfig.model,
-                    },
                     primaryLanguage,
                     secondaryLanguage,
                 }),
@@ -286,11 +275,6 @@ export function HomeworkModule() {
             return;
         }
 
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key in the settings.');
-            return;
-        }
-
         setLoading(true);
         setProgress({ current: 0, total: numberOfProblems, message: 'Starting...' });
         try {
@@ -312,7 +296,6 @@ export function HomeworkModule() {
                         debugAllowFallback,
                         selectedChapters: selectedChapters.length > 0 ? selectedChapters : undefined,
                     },
-                    llmConfig: activeLLMConfig,
                     languageConfig: { primaryLanguage, secondaryLanguage },
                     subject,
                     includeWebResources: includeWebResources || false,
@@ -503,7 +486,6 @@ export function HomeworkModule() {
     const handleRegenerateProblem = async (index: number) => {
         if (!homework) return;
         if (contextFiles.length === 0) return;
-        if (!activeLLMConfig.apiKey) return;
         const target = homework.problems?.[index];
         if (!target) return;
 
@@ -527,7 +509,6 @@ export function HomeworkModule() {
                         sourceDocuments,
                         debugAllowFallback,
                     },
-                    llmConfig: activeLLMConfig,
                     languageConfig: {
                         primaryLanguage,
                         secondaryLanguage,
@@ -602,7 +583,6 @@ export function HomeworkModule() {
                                     sourceDocuments,
                                     debugAllowFallback,
                                 },
-                                llmConfig: activeLLMConfig,
                                 languageConfig: {
                                     primaryLanguage,
                                     secondaryLanguage,
@@ -720,17 +700,6 @@ export function HomeworkModule() {
                                 value={minutesPerProblem}
                                 onChange={(e) => setMinutesPerProblem(Math.max(1, Math.min(180, Number(e.target.value) || 1)))}
                             />
-                        </div>
-                        <div>
-                            <Label htmlFor="hw-debug-fallback">Debug: Allow Fallback</Label>
-                            <div className="h-10 flex items-center">
-                                <input
-                                    id="hw-debug-fallback"
-                                    type="checkbox"
-                                    checked={debugAllowFallback}
-                                    onChange={(e) => setDebugAllowFallback(e.target.checked)}
-                                />
-                            </div>
                         </div>
                     </div>
 
@@ -1066,7 +1035,6 @@ export function HomeworkModule() {
                                                                 sourceDocuments,
                                                                 debugAllowFallback,
                                                             },
-                                                            llmConfig: activeLLMConfig,
                                                             languageConfig: {
                                                                 primaryLanguage,
                                                                 secondaryLanguage,

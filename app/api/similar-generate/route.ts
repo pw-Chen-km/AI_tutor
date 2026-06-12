@@ -4,20 +4,88 @@ import { authOptions } from '@/lib/auth/config';
 import { recordUsage } from '@/lib/payments/usage-tracker';
 import { jsonrepair } from 'jsonrepair';
 import promptTemplates from '@/lib/llm/prompt-templates.json';
-import { getActiveLLMConfig } from '@/lib/llm/config';
+import { getRequiredPlatformLLMConfig } from '@/lib/llm/platform';
+import { logServerError, publicErrorMessage } from '@/lib/server/api';
+import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
 
 interface SimilarGenerateRequest {
     originalItem: any;
     moduleType: 'drills' | 'labs' | 'homework' | 'exams';
-    llmConfig: {
-        apiKey: string;
-        baseURL: string;
-        model: string;
-    };
     primaryLanguage: string;
     secondaryLanguage: string;
+}
+
+function parseJsonContent(raw: string) {
+    const text = String(raw || '').trim();
+    const fenced = text.match(/```json\s*([\s\S]*?)\s*```/i)?.[1]
+        ?? text.match(/```\s*([\s\S]*?)\s*```/i)?.[1];
+    const candidate = (fenced ?? text).trim();
+    try {
+        return JSON.parse(candidate);
+    } catch {
+        return JSON.parse(jsonrepair(candidate));
+    }
+}
+
+async function callPlatformJson(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>) {
+    const llmConfig = getRequiredPlatformLLMConfig();
+    const isGemini = llmConfig.baseURL?.includes('generativelanguage.googleapis.com') || llmConfig.model?.includes('gemini');
+
+    if (isGemini) {
+        const geminiBase = (llmConfig.baseURL || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '');
+        const apiVersion = 'v1beta';
+        const geminiModel = (llmConfig.model || 'gemini-1.5-flash').replace(/^models\//, '');
+        const apiUrl = `${geminiBase}/${apiVersion}/models/${geminiModel}:generateContent?key=${encodeURIComponent(llmConfig.apiKey)}`;
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: messages.map((msg) => ({
+                    role: msg.role === 'assistant' ? 'model' : 'user',
+                    parts: [{ text: msg.role === 'system' ? `SYSTEM:\n${msg.content}` : msg.content }],
+                })),
+                generationConfig: {
+                    temperature: 0.7,
+                    maxOutputTokens: 8000,
+                    responseMimeType: 'application/json',
+                },
+            }),
+        });
+        if (!response.ok) throw new Error(`AI service error (${response.status})`);
+        const data = await response.json();
+        const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        return {
+            parsed: parseJsonContent(content),
+            tokenUsage: data.usageMetadata
+                ? {
+                    promptTokens: data.usageMetadata.promptTokenCount || 0,
+                    candidatesTokens: data.usageMetadata.candidatesTokenCount || 0,
+                }
+                : null,
+            model: llmConfig.model,
+        };
+    }
+
+    const client = new OpenAI({ apiKey: llmConfig.apiKey, baseURL: llmConfig.baseURL || 'https://api.openai.com/v1' });
+    const response = await client.chat.completions.create({
+        model: llmConfig.model || 'gpt-5.5',
+        messages,
+        response_format: { type: 'json_object' },
+        max_completion_tokens: 8000,
+    });
+    const content = response.choices[0]?.message?.content || '';
+    return {
+        parsed: parseJsonContent(content),
+        tokenUsage: response.usage
+            ? {
+                promptTokens: response.usage.prompt_tokens || 0,
+                completionTokens: response.usage.completion_tokens || 0,
+            }
+            : null,
+        model: llmConfig.model,
+    };
 }
 
 export async function POST(req: NextRequest) {
@@ -29,10 +97,9 @@ export async function POST(req: NextRequest) {
         }
 
         const body: SimilarGenerateRequest = await req.json();
-        const { originalItem, moduleType, llmConfig: rawLLMConfig, primaryLanguage, secondaryLanguage } = body;
-        const llmConfig = getActiveLLMConfig(rawLLMConfig);
+        const { originalItem, moduleType, primaryLanguage, secondaryLanguage } = body;
 
-        if (!originalItem || !moduleType || !llmConfig?.apiKey) {
+        if (!originalItem || !moduleType) {
             return NextResponse.json(
                 { error: 'Missing required parameters' },
                 { status: 400 }
@@ -69,56 +136,21 @@ ${hasSecondary ? `Generate content in BOTH ${primaryLanguage} and ${secondaryLan
 
 Output the new question in the SAME JSON format as the original (single object, not array).`;
 
-        // Use internal proxy-llm route to handle different LLM providers (Gemini, OpenAI, etc.)
-        // Get the request URL to construct the proxy URL
-        const baseUrl = req.url ? new URL(req.url).origin : 'http://localhost:3000';
-        const proxyUrl = `${baseUrl}/api/proxy-llm`;
-        
-        console.log('[similar-generate] Calling proxy-llm with:', {
-            model: llmConfig.model,
-            baseURL: llmConfig.baseURL?.substring(0, 50) + '...',
-            hasApiKey: !!llmConfig.apiKey
-        });
-
-        const proxyResponse = await fetch(proxyUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                apiKey: llmConfig.apiKey,
-                baseURL: llmConfig.baseURL,
-                model: llmConfig.model,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt },
-                ],
-            }),
-        });
-
-        if (!proxyResponse.ok) {
-            const errorText = await proxyResponse.text().catch(() => '');
-            console.error('[similar-generate] Proxy error:', errorText);
-            throw new Error(`LLM API error (${proxyResponse.status}): ${errorText}`);
-        }
-
-        // proxy-llm returns JSON object with optional _tokenUsage
-        const proxyData = await proxyResponse.json();
-        console.log('[similar-generate] Raw proxy response:', JSON.stringify(proxyData).substring(0, 500));
-        
-        const parsed = proxyData.content || proxyData;
-        const tokenUsage = proxyData._tokenUsage;
-        
-        console.log('[similar-generate] Parsed content:', JSON.stringify(parsed).substring(0, 500));
+        const { parsed, tokenUsage, model } = await callPlatformJson([
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+        ]);
         
         if (!parsed || typeof parsed !== 'object') {
-            console.error('[similar-generate] Invalid parsed content:', parsed);
             throw new Error('No valid content received from LLM');
         }
 
         // Record token usage if available
         if (tokenUsage && session?.user?.id) {
             try {
-                const inputTokens = tokenUsage.promptTokens || tokenUsage.prompt_tokens || 0;
-                const outputTokens = tokenUsage.candidatesTokens || tokenUsage.completionTokens || tokenUsage.completion_tokens || 0;
+                const usage = tokenUsage as any;
+                const inputTokens = usage.promptTokens || usage.prompt_tokens || 0;
+                const outputTokens = usage.candidatesTokens || usage.completionTokens || usage.completion_tokens || 0;
                 
                 if (inputTokens > 0 || outputTokens > 0) {
                     await recordUsage(
@@ -126,13 +158,12 @@ Output the new question in the SAME JSON format as the original (single object, 
                         moduleType,
                         inputTokens,
                         outputTokens,
-                        llmConfig.model || 'unknown'
+                        model || 'unknown'
                     );
-                    console.log(`[similar-generate] Recorded ${inputTokens + outputTokens} tokens for ${moduleType}`);
                 }
             } catch (usageError: any) {
                 // Don't fail the request if usage recording fails
-                console.error('[similar-generate] Failed to record token usage:', usageError);
+                logServerError('[similar-generate] Failed to record token usage:', usageError);
             }
         } else if (session?.user?.id) {
             // Fallback: estimate tokens if not provided by API
@@ -144,11 +175,10 @@ Output the new question in the SAME JSON format as the original (single object, 
                     moduleType,
                     Math.round(estimatedInput),
                     Math.round(estimatedOutput),
-                    llmConfig.model || 'unknown'
+                    model || 'unknown'
                 );
-                console.log(`[similar-generate] Recorded estimated ${Math.round(estimatedInput + estimatedOutput)} tokens for ${moduleType}`);
             } catch (usageError: any) {
-                console.error('[similar-generate] Failed to record estimated token usage:', usageError);
+                logServerError('[similar-generate] Failed to record estimated token usage:', usageError);
             }
         }
 
@@ -166,11 +196,10 @@ Output the new question in the SAME JSON format as the original (single object, 
 
         return NextResponse.json({ variant }, { status: 200 });
     } catch (error: any) {
-        console.error('Similar generate error:', error);
+        logServerError('Similar generate error:', error);
         return NextResponse.json(
-            { error: error?.message || 'Failed to generate similar question' },
+            { error: publicErrorMessage(error, 'Failed to generate similar question') },
             { status: 500 }
         );
     }
 }
-

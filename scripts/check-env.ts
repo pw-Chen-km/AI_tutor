@@ -19,6 +19,25 @@ const REQUIRED_ENV = [
   'EMAIL_FROM',
 ];
 
+// Platform-managed AI service. PLATFORM_LLM_API_KEY is preferred, provider-specific
+// keys are accepted for compatibility with existing deployments.
+const PLATFORM_LLM_KEY_ENV = [
+  'PLATFORM_LLM_API_KEY',
+  'OPENAI_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_GENERATIVE_AI_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'CUSTOM_LLM_API_KEY',
+];
+
+const PLATFORM_LLM_OPTIONAL_ENV = [
+  'PLATFORM_LLM_PROVIDER',
+  'PLATFORM_LLM_BASE_URL',
+  'PLATFORM_LLM_MODEL',
+  'ALLOWED_CUSTOM_LLM_HOSTS',
+];
+
 // Stripe 相關 (如果使用 Stripe)
 const STRIPE_ENV = [
   'STRIPE_SECRET_KEY',
@@ -95,6 +114,29 @@ function checkEnvVars(env: Record<string, string>) {
         ? `${value.substring(0, 8)}...${value.substring(value.length - 4)}`
         : value;
       console.log(`  ✅ ${key} = ${displayValue}`);
+    }
+  }
+
+  console.log('\n🤖 Platform AI 設定 (Required for modules):');
+  const configuredLLMKey = PLATFORM_LLM_KEY_ENV.find((key) => {
+    const value = env[key];
+    return value && value !== '' && !value.includes('your-') && !value.includes('xxxxx');
+  });
+  if (!configuredLLMKey) {
+    console.log(`  ❌ 缺少平台 AI API key (${PLATFORM_LLM_KEY_ENV.join(' 或 ')})`);
+    missingRequired.push('PLATFORM_LLM_API_KEY');
+    hasErrors = true;
+  } else {
+    const value = env[configuredLLMKey];
+    const displayValue = `${value.substring(0, 8)}...${value.substring(value.length - 4)}`;
+    console.log(`  ✅ ${configuredLLMKey} = ${displayValue}`);
+  }
+  for (const key of PLATFORM_LLM_OPTIONAL_ENV) {
+    const value = env[key];
+    if (!value || value === '' || value.includes('your-') || value.includes('xxxxx')) {
+      console.log(`  ℹ️  ${key} - 未設定，將使用預設值或不啟用`);
+    } else {
+      console.log(`  ✅ ${key} = ${value}`);
     }
   }
   

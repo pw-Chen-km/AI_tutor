@@ -13,7 +13,6 @@ import { Sparkles, Copy, Check, Loader2, Edit2, Eye, Languages } from 'lucide-re
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import { getActiveLLMConfig } from '@/lib/llm/config';
 
 type LectureResult = {
     title?: string;
@@ -64,7 +63,6 @@ function formatDateYYYYMMDD(date: Date) {
 export function LectureRehearsalModule() {
     const {
         contextFiles,
-        llmConfig,
         languageConfig,
         includeWebResources,
         generatedContent,
@@ -73,7 +71,6 @@ export function LectureRehearsalModule() {
 
     const primaryLanguage = languageConfig?.primaryLanguage || 'English';
     const secondaryLanguage = languageConfig?.secondaryLanguage || 'none';
-    const activeLLMConfig = useMemo(() => getActiveLLMConfig(llmConfig), [llmConfig]);
 
     const [loading, setLoading] = useState(false);
     const [copied, setCopied] = useState(false);
@@ -170,30 +167,14 @@ export function LectureRehearsalModule() {
             alert('Please upload at least one file.');
             return;
         }
-        if (!activeLLMConfig.apiKey) {
-            alert('Please configure your API key in LLM Settings.');
-            return;
-        }
-
         setLoading(true);
         setProgress({ current: 0, total: 100, message: 'Starting...' });
         
         try {
-            // Get current provider's API key, or use the deprecated apiKey field
-            const currentApiKey = activeLLMConfig.apiKey;
-            
             const res = await fetch('/api/lecture-rehearsal-stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    apiKey: currentApiKey,
-                    baseURL: activeLLMConfig.baseURL,
-                    model: activeLLMConfig.model,
-                    provider: activeLLMConfig.provider,
-                    // Send all available API keys for parallel processing with multiple LLMs
-                    apiKeys: llmConfig.apiKeys,
-                    // Per-provider model names (used when building LLM pool)
-                    providerModels: llmConfig.providerModels ?? undefined,
                     primaryLanguage,
                     secondaryLanguage,
                     includeWebResources,

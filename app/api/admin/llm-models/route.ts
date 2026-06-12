@@ -1,27 +1,91 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth/config';
+import { logServerError, publicErrorMessage, requireAdminSession } from '@/lib/server/api';
+
+const OFFICIAL_PROVIDER_HOSTS: Record<string, string[]> = {
+  openai: ['api.openai.com'],
+  gemini: ['generativelanguage.googleapis.com'],
+  anthropic: ['api.anthropic.com'],
+  deepseek: ['api.deepseek.com'],
+};
+
+const DEFAULT_PROVIDER_BASE_URLS: Record<string, string> = {
+  openai: 'https://api.openai.com/v1',
+  gemini: 'https://generativelanguage.googleapis.com',
+  anthropic: 'https://api.anthropic.com/v1',
+  deepseek: 'https://api.deepseek.com/v1',
+  custom: 'http://localhost:11434',
+};
+
+function getAllowedCustomHosts() {
+  return (process.env.ALLOWED_CUSTOM_LLM_HOSTS || '')
+    .split(',')
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function normalizeAllowedBaseURL(provider: string, baseURL?: string) {
+  const normalizedProvider = provider.toLowerCase();
+  const rawURL = String(baseURL || DEFAULT_PROVIDER_BASE_URLS[normalizedProvider] || '').trim();
+  if (!rawURL) throw new Error('Base URL is required for this provider.');
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawURL);
+  } catch {
+    throw new Error('Invalid base URL.');
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('Base URL must use HTTP or HTTPS.');
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  const officialHosts = OFFICIAL_PROVIDER_HOSTS[normalizedProvider] || [];
+  if (officialHosts.length > 0) {
+    if (!officialHosts.includes(hostname)) {
+      throw new Error('Provider base URL is not allowed.');
+    }
+    return parsed.toString().replace(/\/$/, '');
+  }
+
+  const allowedCustomHosts = getAllowedCustomHosts();
+  const devLocalHosts = process.env.NODE_ENV !== 'production'
+    ? ['localhost', '127.0.0.1', '::1']
+    : [];
+  if (allowedCustomHosts.includes(hostname) || devLocalHosts.includes(hostname)) {
+    return parsed.toString().replace(/\/$/, '');
+  }
+
+  throw new Error('Custom provider host is not allowed.');
+}
 
 // Fetch available models from different providers
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await requireAdminSession();
+    if (auth.response) return auth.response;
 
     const { provider, apiKey, baseURL } = await request.json();
+    const normalizedProvider = String(provider || '').toLowerCase();
 
-    if (!provider) {
+    if (!normalizedProvider) {
       return NextResponse.json({ error: 'Provider is required' }, { status: 400 });
     }
 
+    let safeBaseURL: string;
+    try {
+      safeBaseURL = normalizeAllowedBaseURL(normalizedProvider, baseURL);
+    } catch (error) {
+      return NextResponse.json(
+        { error: publicErrorMessage(error, 'Provider base URL is not allowed.') },
+        { status: 400 }
+      );
+    }
     let models: { value: string; label: string }[] = [];
 
-    switch (provider) {
+    switch (normalizedProvider) {
       case 'openai':
-        models = await fetchOpenAIModels(apiKey, baseURL);
+        models = await fetchOpenAIModels(apiKey, safeBaseURL);
         break;
       case 'gemini':
         models = await fetchGeminiModels(apiKey);
@@ -32,10 +96,10 @@ export async function POST(request: NextRequest) {
         models = getAnthropicModels();
         break;
       case 'deepseek':
-        models = await fetchDeepSeekModels(apiKey, baseURL);
+        models = await fetchDeepSeekModels(apiKey, safeBaseURL);
         break;
       case 'custom':
-        models = await fetchOllamaModels(baseURL);
+        models = await fetchOllamaModels(safeBaseURL);
         break;
       default:
         return NextResponse.json({ error: 'Unknown provider' }, { status: 400 });
@@ -43,9 +107,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ models });
   } catch (error: any) {
-    console.error('[LLM Models API] Error:', error);
+    logServerError('[LLM Models API] Error:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to fetch models' },
+      { error: publicErrorMessage(error, 'Failed to fetch models') },
       { status: 500 }
     );
   }
@@ -97,7 +161,7 @@ async function fetchOpenAIModels(apiKey?: string, baseURL?: string): Promise<{ v
 
     return chatModels.length > 0 ? chatModels : getOpenAIFallbackModels();
   } catch (error) {
-    console.error('[OpenAI] Error fetching models:', error);
+    logServerError('[OpenAI] Error fetching models:', error);
     return getOpenAIFallbackModels();
   }
 }
@@ -163,7 +227,7 @@ async function fetchGeminiModels(apiKey?: string): Promise<{ value: string; labe
 
     return chatModels.length > 0 ? chatModels : getGeminiFallbackModels();
   } catch (error) {
-    console.error('[Gemini] Error fetching models:', error);
+    logServerError('[Gemini] Error fetching models:', error);
     return getGeminiFallbackModels();
   }
 }
@@ -221,7 +285,7 @@ async function fetchDeepSeekModels(apiKey?: string, baseURL?: string): Promise<{
 
     return models.length > 0 ? models : getDeepSeekFallbackModels();
   } catch (error) {
-    console.error('[DeepSeek] Error fetching models:', error);
+    logServerError('[DeepSeek] Error fetching models:', error);
     return getDeepSeekFallbackModels();
   }
 }
@@ -257,7 +321,7 @@ async function fetchOllamaModels(baseURL?: string): Promise<{ value: string; lab
 
     return models.length > 0 ? models : getOllamaFallbackModels();
   } catch (error) {
-    console.error('[Ollama] Error fetching models (is Ollama running?):', error);
+    logServerError('[Ollama] Error fetching models (is Ollama running?):', error);
     return getOllamaFallbackModels();
   }
 }

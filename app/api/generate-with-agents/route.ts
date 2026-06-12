@@ -15,7 +15,8 @@ import { gatherWebSources } from '@/lib/web-search/web-search';
 import { recordUsage } from '@/lib/payments/usage-tracker';
 import OpenAI from 'openai';
 import { jsonrepair } from 'jsonrepair';
-import { getActiveLLMConfig } from '@/lib/llm/config';
+import { getRequiredPlatformLLMConfig } from '@/lib/llm/platform';
+import { logServerError, publicErrorMessage } from '@/lib/server/api';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120; // 120 seconds timeout (increased for web search)
@@ -100,16 +101,12 @@ Return ONLY a JSON array like: ["query1", "query2", "query3"]`;
 }
 
 export async function POST(req: NextRequest) {
-  console.log('[generate-with-agents] ====== REQUEST RECEIVED ======');
   try {
     const session = await getServerSession(authOptions);
     
     if (!session?.user?.id) {
-      console.error('[generate-with-agents] Unauthorized: no session');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-
-    console.log('[generate-with-agents] User ID:', session.user.id);
 
     // Check subscription plan for web search access
     const subscription = await prisma.subscription.findUnique({
@@ -126,28 +123,19 @@ export async function POST(req: NextRequest) {
     const hasWebSearchAccess = user?.isSuperUser || planConfig?.features?.webSearch || false;
 
     const body = await req.json();
-    console.log('[generate-with-agents] Request body:', {
-      moduleType: body.moduleType,
-      numberOfItems: body.numberOfItems,
-      action: body.action,
-      contextLength: body.context?.length || 0,
-      hasTaskParams: !!body.taskParams,
-      hasLLMConfig: !!body.llmConfig,
-    });
     
     const {
       moduleType,
       numberOfItems,
       context,
       taskParams,
-      llmConfig: rawLLMConfig,
       languageConfig,
       subject,
       includeWebResources, // Get from body
       action = 'generate', // 'generate' or 'regenerate'
       originalItem, // for regenerate action
     } = body;
-    const llmConfig = getActiveLLMConfig(rawLLMConfig);
+    const llmConfig = getRequiredPlatformLLMConfig();
 
     // Validate web search access
     if (includeWebResources && !hasWebSearchAccess) {
@@ -160,10 +148,6 @@ export async function POST(req: NextRequest) {
     // Validate required fields
     if (!moduleType) {
       return NextResponse.json({ error: 'moduleType is required' }, { status: 400 });
-    }
-
-    if (!llmConfig?.apiKey) {
-      return NextResponse.json({ error: 'LLM API key is required' }, { status: 400 });
     }
 
     if (action === 'generate' && !numberOfItems) {
@@ -192,7 +176,7 @@ export async function POST(req: NextRequest) {
           });
         }
       } catch (error) {
-        console.error('Web search error:', error);
+        logServerError('Web search error:', error);
         // Continue without web sources if search fails
       }
     }
@@ -253,29 +237,12 @@ export async function POST(req: NextRequest) {
       totalTokensUsed = tokensUsed;
     } else {
       // Generate multiple items
-      console.log('[generate-with-agents] Calling orchestrator.generateQuestions...');
-      console.log('[generate-with-agents] Parameters:', {
-        moduleType,
-        numberOfItems,
-        contextLength: context?.length || 0,
-        taskParamsKeys: Object.keys(taskParams || {}),
-        typeCounts: taskParams?.typeCounts,
-      });
-      
       const { results: generatedResults, totalTokensUsed: tokens } = await orchestrator.generateQuestions({
         moduleType,
         numberOfItems,
         context: context || '',
         taskParams: taskParams || {},
         llmContext: skillContext,
-      });
-      
-      console.log('[generate-with-agents] Orchestrator returned:', {
-        resultsCount: generatedResults?.length || 0,
-        totalTokensUsed: tokens,
-        firstResultKeys: generatedResults?.[0] ? Object.keys(generatedResults[0]) : [],
-        firstResultQuestion: generatedResults?.[0]?.question?.substring(0, 100) || 'NO QUESTION',
-        firstResultSolution: generatedResults?.[0]?.solution?.substring(0, 100) || 'NO SOLUTION',
       });
       
       results = generatedResults;
@@ -296,16 +263,13 @@ export async function POST(req: NextRequest) {
         llmConfig.model || 'unknown'
       );
       
-      console.log(`[generate-with-agents] Recorded ${totalTokensUsed} tokens for ${moduleType} (input: ${inputTokens}, output: ${outputTokens})`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[generate-with-agents] Recorded ${totalTokensUsed} tokens for ${moduleType} (input: ${inputTokens}, output: ${outputTokens})`);
+      }
     } catch (usageError: any) {
       // Don't fail the request if usage recording fails
-      console.error('[generate-with-agents] Failed to record token usage:', usageError);
+      logServerError('[generate-with-agents] Failed to record token usage:', usageError);
     }
-
-    console.log('[generate-with-agents] Final results before returning:', {
-      resultsCount: results?.length || 0,
-      resultsSample: results?.[0] ? JSON.stringify(results[0]).substring(0, 500) : 'NO RESULTS',
-    });
 
     return NextResponse.json({
       success: true,
@@ -319,16 +283,12 @@ export async function POST(req: NextRequest) {
     });
 
   } catch (error: any) {
-    console.error('Agent generation error:', error);
+    logServerError('Agent generation error:', error);
     return NextResponse.json(
-      { 
-        error: error.message || 'Failed to generate content',
-        details: error.stack,
-      },
+      { error: publicErrorMessage(error, 'Failed to generate content') },
       { status: 500 }
     );
   }
 }
-
 
 
